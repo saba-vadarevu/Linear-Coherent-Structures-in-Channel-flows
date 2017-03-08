@@ -15,32 +15,50 @@ IMPORTANT: Everything here is written only for internal nodes.
 class linearize(object):
     def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel", **kwargs):
         """
-        Initialize OSS class instance
+        Initialize OSS class instance. 
         Inputs:
-            N   :   Number of internal nodes (x2 for BL to cover eta <0)
-                        default: 35
-            U   :   Spatiotemporal mean streamwise velocity
-            d2U :   U''
-            flowClass: "channel", "couette", or "bl"
-                            default: channel
-        flowClass determines the operators D2 and D4 to be used, and also U and d2U if not supplied.
+            N(=50)      :   Number of internal nodes (x2 for BL to cover eta <0)
+            U(=None)    :   Spatiotemporal mean streamwise velocity
+            dU(=None)   :   dU/dy
+            d2U(=None)  :   d2U/dy2
+            flowClass(="channel")   : "channel", "couette", or "bl"
+
+        Attributes: 
+            N (no. of nodes), y (node location) 
+            D1, D2, D4: Differentiation matrices
+            w:  Weight matrix for defining integral norms. Use as np.dot(w,someFunctionOn_y)
+            U, dU, d2U, flowClass:  Mean velocity and its derivatives, and flowClass
+            __version__ :   Irrelevant to code, keeps track of development.
+        flowClass determines the operators D1, D2 and D4 to be used, and also U and d2U if not supplied.
         If U and d2U are not supplied, initialize with laminar velocity profile
+
+        Methods:
+            _weightVec, _weightMat: Returns clencurt-weighted versions of 1-d and 2-d arrays, 
+                                    so that 2-norm of the weighted versions give energy norm of the original.
+            _deweightVec, _deweightMat: Revert weighted versions to original unweighted versions 
+            OS, OSS:    Orr-Sommerfeld and Orr-Sommerfeld-Squire matrix operators 
+                            (coefficient matrix multiplying df/dt is included in the returned matrix)
+            eig, svd:   Calls numpy.linalg's eig and svd routines, with kwarg for weighting.
+            resolvent:  Currently unavailable.
+
+            
         """
+        N = np.int(N)
         if flowClass == "bl":
-            warn("Code for boundary layers is not ready yet.. DO NOT TRUST THESE RESULTS.")
-            y,DM = pseudo.chebdifBL(N+1,2)
-            y = y[1:]   # Ignore the wall
-            DM = DM[1:,1:]
-            D  = DM[:,:,0]
+            Y = kwargs.get('Y',15.)
+            if (N<70) or (Y<10.):
+                warn("BLs need lots of nodes.. N and Y should be set at >~ 100 and >~ 15, currently they are %d, %.1g"%(N,Y))
+            y,DM = pseudo.chebdifBL(N,Y=Y)    # BL code is written to return D only on internal nodes
+            D1  = DM[:,:,0]
             D2 = DM[:,:,1]
-            D4 = np.dot(D2,D2)  # This has to change to employ clamped BCs
-            w = pseudo.clencurt(N+1)  # This is very wrong. Need to use transformed weights
-            w = w[1:]
+            D4 = pseudo.cheb4cBL(N, Y=Y)
+            w = pseudo.clencurtBL(N)  
         else:
             if flowClass not in ("channel" , "couette"):
                 print("flowClass is not set to 'channel', 'bl', or 'couette'. Defaulting to 'channel'.....")
                 flowClass = "channel"
             y,DM = pseudo.chebdif(N+2,2)
+            # For now, channel code is written to include nodes at the wall. 
             y = y[1:-1]     # Ignore both walls
             DM = DM[1:-1, 1:-1]
             D1 = DM[:,:,0]
@@ -48,7 +66,8 @@ class linearize(object):
             D4 = pseudo.cheb4c(N+2)       # Imposes clamped BCs
             w = pseudo.clencurt(N+2)      # Weights matrix
             w = w[1:-1]
-        
+       
+        self.__version__ = '3.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1
@@ -63,7 +82,6 @@ class linearize(object):
                 U = self.y; dU = np.ones(U.size); d2U = np.zeros(U.size)
             elif flowClass == "bl":
                 U,dU = blasius.blasius(self.y)
-                U = U[1:]; dU = dU[1:]
                 d2U = np.dot( self.D2, (U-1.) )
 
             else:
@@ -88,6 +106,10 @@ class linearize(object):
         self.d2U = d2U
         self.flowClass = flowClass
 
+        print("Initialized instance of 'linearize', version %s." %(self.__version__),
+                "New in this version: diffmats and OSS validated for channel and BL LSA. ",
+                "To fix: channel routines in pseudo.py to ignore wall-nodes, ",
+                "To fix: Eddy viscosity, resolvent, and svd are currently not supported.",sep="\n")
 
         return
         

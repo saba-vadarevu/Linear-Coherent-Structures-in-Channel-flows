@@ -224,7 +224,7 @@ def chebdot(arr1,arr2,N):
     return dotArr 
 
 def chebnorm1(arr,N):
-    """ norm1 = chebnorm(arr,N): Returns 1-norm of array 'arr', weighted by clencurt weights (see clencurt(N)) 
+    """ norm1 = chebnorm1(arr,N): Returns 1-norm of array 'arr', weighted by clencurt weights (see clencurt(N)) 
     Inputs:
         arr:    np.ndarray whose size is an integral multiple of N
                     Can be multi-dimensional.
@@ -234,7 +234,7 @@ def chebnorm1(arr,N):
     return _chebdotvec( np.abs(arr.flatten())   , np.ones(arr.size) , N) 
 
 def chebnorm2(vec,N):
-    """ norm2 = chebnorm(arr,N): Returns 2-norm of array 'arr', weighted by clencurt weights (see clencurt(N)) 
+    """ norm2 = chebnorm2(arr,N): Returns 2-norm of array 'arr', weighted by clencurt weights (see clencurt(N)) 
     Inputs:
         arr:    np.ndarray whose size is an integral multiple of N
                     If multi-dimensional, arr is flattened.
@@ -243,6 +243,17 @@ def chebnorm2(vec,N):
     Outputs:
         norm:   2-norm, weighted by clenshaw-curtis weights."""
     return chebnorm(vec,N)
+
+def chebnorml(arr,N,l=2):
+    """ l_norm = chebnorml(arr,N): Returns l-norm of array 'arr', weighted by clencurt weights (see clencurt(N)) 
+    Inputs:
+        arr:    np.ndarray whose size is an integral multiple of N
+                    Can be multi-dimensional.
+        N:      Number of Chebyshev collocation nodes
+        l(=2):  Order of the norm
+    Outputs:
+        norm:   l-norm, weighted by clenshaw-curtis weights."""
+    return _chebdotvec( np.abs(arr.flatten()**l)   , np.ones(arr.size) , N) 
 
 def _chebcoeffsvec(f):
     f = f.flatten(); N = f.size
@@ -372,15 +383,17 @@ def chebintegrate(v):
     return integral.reshape(shape)
 
 
-def cheb4c(N):
+def cheb4c(N,returnAll=False):
     """
     Define the fourth order differentiation matrix for channel system incorporating the clamped boundary conditions, 
     u(y=+/-1) = u'(y=+/-1) = 0
     Inputs:
         N:  Number of Chebyshev nodes (including walls)
-
+        returnAll(bool=False): If true return all four differentiation matrices instead of just the 4th order
     Outputs:
-        D4: Fourth order differentiation matrix
+        D4: Fourth order differentiation matrix of size N-2 x N-2 (exclude wall nodes) when returnAll=False
+        DM: Differentiation matrix array of size N-2 x N-2 x 4, for D1, D2,D3,D4 when returnAll=True
+            
     """
     N = np.int(N)
     I = np.identity(N-2)
@@ -441,8 +454,10 @@ def cheb4c(N):
         DM[:,:,ell] = D
 
     D4 = DM[:,:,3]
-
-    return D4
+    if returnAll:
+        return DM
+    else:
+        return D4
 
 
 
@@ -451,10 +466,10 @@ def cheb4c(N):
 #--------------------------------------------------------------------------------
 # BL code
 
-def chebdifBL(N,Y=5):
+def chebdifBL(N,Y=15.):
     """ y, DM = chebdifBL(N,Y): Differentiation matrices and mapped Chebyshev nodes for boundary layers
     Inputs:
-        N:  Number of nodes to use in the semi-infinite domain y \in [0,\inf)
+        N:  Number of internal nodes to use in the semi-infinite domain y \in [0,\inf)
         Y:  Scaling factor for the transformation eta = exp(-y/Y)
                 A small scaling factor concentrates nodes closer to the wall, which is good for 
                     near-wall resolution, but not good for saturation of derivatives
@@ -464,10 +479,12 @@ def chebdifBL(N,Y=5):
         DM:     Differentiation matrices, for four orders.
                 Extract as D1 = DM[:,:,0], D2 = [:,:,1] and so on..
     """
-    eta,DM = chebdif(2*N,4)
+    eta,DM = chebdif(2*(N+1),4)
+
 
     # [0,\inf] is mapped to only [1,0)
-    eta = eta[:N]; DM = np.ascontiguousarray(DM[:N,:N])
+    eta = eta[1:N+1]; DM = np.ascontiguousarray(DM[1:N+1,1:N+1])
+    # Ignoring the wall at y = 0 or eta = 1
 
     # Mapped nodes:
     y = -Y*np.log(eta)
@@ -490,6 +507,140 @@ def chebdifBL(N,Y=5):
     warn("Differentiation matrices for BLs only work on quantities that go to 0 as y -> inf.")
     
     return y, DMnew
+
+def cheb4cBL(N,Y=15.): 
+    """ D4 (or DM) = cheb4cBL(N,Y=15,returnAll=False):
+                Return the fourth differentiation matrix incorporating clamped BCs at y= 0 and y = \inf 
+    Inputs:
+        N:      Number of internal nodes in semi-infinite domain. Number of mapped Cheb nodes (including both walls) is 2N+2
+        Y(=15): Scaling factor for transformation. Large factor ensures that function values ignored are low enough. 
+    Outputs:
+        D4:     Fourth differentiation matrix (returnAll=False) """
+    eta= chebdif(2*(N+1),4)[0]
+
+    # [0,\inf] is mapped to only [1,0)
+    eta = eta[1:N+1]    # Ignoring the wall at y = 0 or eta = 1
+    
+    # Mapped nodes:
+    y = -Y*np.log(eta)
+
+    eta = eta.reshape((N,1)) # Makes multiplying with 2d arrays easier
+
+    # Define D4 incorporating clamped boundary conditions u = u' = 0 at walls
+    DMcl = cheb4c(2*(N+1), returnAll=True)  
+    DMcl = np.ascontiguousarray(DMcl[:N,:N])
+    D4 = ( 1./Y**4 )*(  eta * DMcl[:,:,0] +7.*(eta**2)*DMcl[:,:,1] +6.*(eta**3)*DMcl[:,:,2] + (eta**4)*DMcl[:,:,3]  )
+
+    return D4
+
+
+
+
+
+def clencurtBL(N,Y=15.):
+    """ w = clencurtBL(N): Return a weight matrix so that the dot-produce w*f gives the integral of f on [0,inf)
+    Inputs:
+        N:  Number of internal nodes (excluding y=0 and y=inf)
+        Y (default: 5):  The scaling factor used in the mapping eta = exp(-y/Y). 
+    Outputs:
+        w:  Weight matrix
+    """
+    # The weighting for BLs is supposed work like so:
+    # If f(y) is the function whose integral is sought, and ft(eta) its transformed version,
+    #   we define a third function gt(eta) = (Y/eta), 
+    #   and a regular clencurt weighting of gt should give the integral of f over y. 
+    # But, we want to return an array 'w' that can be used for the weighting, 
+    #   so, we absorb the factor function (Y/eta) into the new weight matrix defined as wBL = (Y/eta)* wChannel
+    eta = chebdif(2*(N+1),1)[0]
+    wCh = clencurt(2*(N+1))
+    wCh = wCh[1:N+1];   eta = eta[1:N+1]    # Only internal nodes
+
+    wBL = (Y/eta)* wCh
+
+    return wBL
+
+
+def _chebdotvecBL(arr1,arr2,N):
+    # This function computes inner products of vectors ONLY.
+    assert (arr1.ndim == 1) and (arr2.ndim == 1), "For dot products of non-1d-arrays, use chebdotBL()"
+
+    prod = (np.array(arr1) * np.array(arr2).conjugate() )
+    prod = prod.reshape((arr1.size//N, N))
+    wvec = clencurtBL(N).reshape((1,N))
+
+    return np.sum( (prod*wvec).flatten() )
+
+
+def chebnormBL(arr,N):
+    """ norm2 = chebnormBL(arr,N): Returns 2-norm of array 'arr', weighted by transformed clencurt weights (see clencurtBL(N)) 
+    Inputs:
+        arr:    np.ndarray whose size is an integral multiple of N
+                    Can be multi-dimensional.
+        N:      Number of nodes in semi-infinite domain, excluding the wall
+    Outputs:
+        norm:   2-norm, weighted by transformed clenshaw-curtis weights for boundary layers."""
+    return np.sqrt(np.abs(_chebdotvecBL(arr.flatten(),arr.flatten(),N) ))
+
+
+def chebdotBL(arr1,arr2,N):
+    """ dotArr = chebdotBL(arr1, arr2, N): Dot products on semi-infinite domain (excluding wall) using transformed clencurt weights
+    Inputs:
+        arr1: np.ndarray (possibly 2-d) whose size is an integral multiple of N
+        arr2: np.ndarray (possibly 2-d) whose size is an integral multiple of N
+            arr1 and arr2 must have same size in their last axis
+    Outputs:
+        dotArr : float of dot product if arr1 and arr2 are 1d
+                 2-d array otherwise
+        """
+    if (arr1.ndim==1) and (arr2.ndim == 1): return _chebdotvecBL(arr1,arr2,N)
+    # Nothing special to be done if both are 1d arrays
+
+    # The arguments arr1 and arr2 can either be vectors or matrices
+    if (arr1.ndim ==1):
+        arr1 = arr1.reshape((1,arr1.size))
+    if (arr2.ndim ==1):
+        arr2 = arr2.reshape((1,arr2.size))
+    dotArr = np.zeros((arr1.shape[0], arr2.shape[0]))
+    for ind1 in range(arr1.shape[0]):
+        for ind2 in range(arr2.shape[0]):
+            dotArr[ind1,ind2] = _chebdotvecBL(arr1[ind1],arr2[ind1],N)
+    
+    return dotArr 
+
+def chebnorm1BL(arr,N):
+    """ norm1 = chebnorm1BL(arr,N): Returns 1-norm of array 'arr', weighted by transformed clencurt weights (see clencurtBL(N)) 
+    Inputs:
+        arr:    np.ndarray whose size is an integral multiple of N
+                    Can be multi-dimensional.
+        N:      Number of nodes in semi-infinite domain excluding the wall 
+    Outputs:
+        norm:   1-norm, weighted by transformed clenshaw-curtis weights for BL."""
+    warn("Naive implementation of 1 norm. Rewrite if calling this too many times- use python profiler")
+    return _chebdotvecBL( np.abs(arr.flatten())   , np.ones(arr.size) , N) 
+
+def chebnorm2BL(vec,N):
+    """ norm2 = chebnorm2BL(arr,N): Returns 2-norm of array 'arr', weighted by transformed clencurt weights for BLs(see clencurtBL(N)) 
+    Inputs:
+        arr:    np.ndarray whose size is an integral multiple of N
+                    If multi-dimensional, arr is flattened.
+                    If size > N, each 'N' elements are normed individually, and their total is added.
+        N:      Number of collocation nodes in semi-infinite domain excluding the wall 
+    Outputs:
+        norm:   2-norm, weighted by transformed clenshaw-curtis weights for BLs."""
+    return chebnormBL(vec,N)
+    
+def chebnormlBL(vec,N,l=2):
+    """ l_norm = chebnormlBL(arr,N): Returns l-norm of array 'arr', weighted by transformed clencurt weights for BLs (see clencurtlBL(N)) 
+    Inputs:
+        arr:    np.ndarray whose size is an integral multiple of N
+                    Can be multi-dimensional.
+        N:      Number of collocation nodes in semi-infinite domain excluding the wall 
+        l(=2):  Order of the norm
+    Outputs:
+        norm:   l-norm, weighted by transformed  clenshaw-curtis weights for BLs."""
+    warn("Naive implementation of l-norm. Rewrite if calling this too many times- use python profiler")
+    return _chebdotvecBL( np.abs( arr.flatten()**l )   , np.ones(arr.size) , N) 
+
 
 
 
