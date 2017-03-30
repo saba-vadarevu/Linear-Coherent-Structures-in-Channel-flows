@@ -24,8 +24,10 @@ gamma is a rank parameter weighting the importance of minimizing the rank of Z
 """
 import numpy as np
 from scipy.linalg import solve_lyapunov
+from numpy.linalg import det
 from warnings import warn
-
+import sys
+import pdb
 
 def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,optDict=None):
     """
@@ -54,6 +56,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     
 
     if outMat is None:
+        warn("No outMat supplied, using identity")
         outMat = np.identity(nState, dtype=dynMat.dtype)
         # Take the state as the output if not specified
     # Dimensionality of output
@@ -62,6 +65,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
 
     
     if structMat is None:
+        warn("No structMat supplied, using non-zero entries of covMat to define one..")
         # Treat all zero entries of covMat as being unknown.
         # It's not ideal, but hey, if you're too lazy to supply a structMat....
         structMat = covMat.copy().astype(bool).astype(np.int)
@@ -75,19 +79,23 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     tolPrimal = optDict.get("tolPrimal",1.0e-06)
     tolDual = optDict.get("tolDual",1.0e-06)
     iterMax = optDict.get("iterMax",1.0e05)
+    if isinstance(stepSize, np.ndarray):stepSize = stepSize.flatten()[0]
 
     # Initializing X, Z, Y1, and Y2 for the iterations
     # Documentation coming soon
 
-    Z0 = optDict.get("Z0",None); X0 = optDict.get("Z0",None); Y10 = optDict.get("Y10",None); 
+    Z0 = optDict.get("Z0",None); X0 = optDict.get("X0",None); Y10 = optDict.get("Y10",None); Y20 = optDict.get("Y20",None)
     if Z0 is None:
+        warn("No Z0 supplied, using identity...")
         Z0 = np.identity(nState , dtype=dynMat.dtype )
     if X0 is None:
-        X0 = solve_lyapunov( dynMat, Z0 )
-    X0 = np.asmatrix(X0);   Z0 = np.axmatrix(Z0)
+        warn("No X0 supplied, solving Lyapunov equation with Z0")
+        X0 = solve_lyapunov( dynMat, -Z0 )
+    X0 = np.asmatrix(X0);   Z0 = np.asmatrix(Z0)
 
     if Y10 is None:
-        Y10 = solve_lyapunov( dynMat.getH(), -X0)
+        warn("No Y10 supplied, solving adjoing Lyapunov equation")
+        Y10 = solve_lyapunov( dynMat.H, X0)
         if not hasattr(Y10, "H"):
             warn("Y10 from solve_lyapunov does not have attribute 'H', so it's an ndarray and not a matrix. I've recast it into matrix, but have a look at why this is happening....")
         Y10 = np.asmatrix(Y10)
@@ -102,14 +110,32 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     Y20 = np.asmatrix(Y20)
     X = X0; Z = Z0; Y1 = Y10; Y2 = Y20
     
+    
     stepSize0 = stepSize
+
+
+
+
+
+
+
+
+
+
     #---------------------------------------------------------------------------------
     #---------------------------------------------------------------------------------
     # AMA method for optimization:
     print("Write decorators for timing and logging (have a look at your bookmarks on Chrome)")
     warn("This code currently uses only method AMA. ADMM from the original matlab function hasn't been implemented.")
+    pdb.set_trace()
 
     # Ignoring some lines from original MATLAB code because I don't see why they're needed (yet)
+    evalsLadjY = np.real( np.linalg.eigvals( dynMat.H * Y1 + Y1*dynMat + \
+                        outMat.H * np.multiply( structMat, Y2) * outMat ) )
+    logDetLadjY = np.sum( np.log( evalsLadjY + 0.j) )
+    dualY = logDetLadjY - np.trace( covMat * Y2) + nState
+
+    #print("Before starting iterations, evalsLadjY, logDetLadjY, dualY, trace(covMat*Y2) are",evalsLadjY, logDetLadjY, dualY, np.trace(covMat*Y2))
 
     Istate = np.identity(nState, dtype=dynMat.dtype)    # Identity
     beta = 0.5      # Backtracking parameter
@@ -117,7 +143,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     failIters = []  # Log failed iteration numbers
 
     print(""); print("Starting iterations for AMA......")
-    print("stepSize_BB  stepSize  tolPrimal   resPrimal  tolDual   abs(eta)    iter")
+    print("stepSize_BB  stepSize  tolPrimal   resPrimal  tolDual   abs(dualGap)    iter")
 
     funPrimalArr = np.zeros(iterMax)
     funDualArr = np.zeros(iterMax)
@@ -128,23 +154,29 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
 
 
     for AMAstep in range(iterMax):
+        dynMat = np.asmatrix(dynMat); outMat = np.asmatrix(outMat)
+        structMat = np.asmatrix(structMat); Istate = np.asmatrix(Istate)
 
         # Minimization step for X^{k+1}
-        Xnew = np.linalg.solve( dynMat.H * Y1 + Y1 * dynMat 
-                +  outMat.H * np.multiply( structMat * Y2) * outMat,  Istate )
+        Xnew = np.linalg.solve( dynMat.H * Y1 + Y1 * dynMat +  outMat.H * np.multiply( structMat , Y2) * outMat,  Istate )
+
+        # Xnew = np.linalg.inv( dynMat.H * Y1 + Y1 * dynMat +  outMat.H * np.multiply( structMat , Y2) * outMat)
+        Xnew = np.asmatrix(Xnew)
+
         # To get the inverse of a matrix A, apparently np.linalg.solve(A, Identity) is better than np.linalg.inv(A)
         # I'm not sure yet if I need to call this Xnew instead of just X, I'll get back to this later
-
         Xnew = (Xnew + Xnew.H)/2.
 
-        eigX = np.real( np.linalg.eig(Xnew) )
-        logDetX = np.sum( np.log( eigX ) ) 
+        eigX = np.real(np.linalg.eigvals(Xnew))
+        logDetX = np.sum( np.log( eigX +0.j) ) 
 
 
 
         # Gradient of the dual function
         gradD1 = dynMat * Xnew  +  Xnew * dynMat.H
         gradD2 = np.multiply( structMat, outMat * Xnew * outMat.H) - covMat
+        #print("|Xnew|,|gradD1|, |gradD2|:",det(Xnew),det(gradD1), det(gradD2))
+        #print()
 
         
         # Define the primal residual as difference in new statistics from observed (constraints)
@@ -152,27 +184,42 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
         stepSize = stepSize1
 
 
-
-        for innerIter in range(50):
+        #if AMAstep == 0:
+            #print()
+            #print("evalsX, logDetX, |gradD1|, |gradD2| are",eigX, logDetX, det(gradD1), det(gradD2))
+        for innerIter in range(100):
             a = rankPar/stepSize
-
+            assert isinstance(dynMat,np.matrix) and (Xnew, np.matrix) and (Y1,np.matrix)
             # Minimization step for Z^{k+1} 
             Wnew = -( dynMat * Xnew + Xnew * dynMat.H  +  (1./stepSize) * Y1 )
+            
             U, svals , V = np.linalg.svd(Wnew)
+            warn("numpy's SVD factors as M=USV, not USV*")
             # The above line differs from the original matlab code because numpy's svd returns the singular values as an array directly, while Matlab returns a diagonal matrix
             if isinstance(svals,np.matrix):
                 warn("The array of singular values is a matrix and not a regular array")
                 svals = svals.A
             assert isinstance(U, np.matrix) and isinstance(V, np.matrix)
+            svals = np.abs(svals)
 
             # Singular value thresholding
-            svalsNew = (  ( 1. - a/np.abs(svals) ) * svals)  * (np.abs(svals) > a).astype(int)
-            # So what happened there is, for svals>a, sNew = (1 - a/|s|) * s = s-aA
-            #   That doesn't make much sense to me, but we'll see how it goes
-            #   Singular values should always be positive, so I don't see why all of that extra stuff is needed...
+            if True:
+                svalsNew = (  ( 1. - a/np.abs(svals) ) * svals)  * (np.abs(svals) > a).astype(int)
+                svalsNew = np.abs(svalsNew)
+                # So what happened there is, for svals>a, sNew = (1 - a/|s|) * s = s-aA
+                #   That doesn't make much sense to me, but we'll see how it goes
+                #   Singular values should always be positive, so I don't see why all of that extra stuff is needed...
+            else:
+                svals = np.abs(svals)
+                svalsNew = svals.copy()
+                svalsNew[svals<=a] = 0.
+                svalsNew[svals>a] = svals - a
+            
+            #print()
+            #print("|Wnew|, a,rankPar, stepSize, svalsNew:", det(Wnew), a,rankPar,stepSize,svalsNew)
 
             # Update Z
-            Znew = U * np.asmatrix(np.diag(svalsNew)) * V.H
+            Znew = U * np.asmatrix(np.diag(svalsNew)) * V
             Znew = (Znew + Znew.H)/2.
 
 
@@ -187,23 +234,25 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
             Y1new = (Y1new + Y1new.H)/2.    # Keep them Hermitian
             Y2new = (Y2new + Y2new.H)/2.
 
+            #print("|Znew|,|Y1new|,|Y2new|:", det(Znew), det(Y1new), det(Y2new))
             assert isinstance(Y1new, np.matrix) and (Y2new, np.matrix)
 
             # Eigenvalues of X^{-1} (why though?) 
-            evalsLadjYnew = np.real( np.linalg.eigvals( dynMat.H * Y1new + Y1new * dynMat 
-                + outMat.H * np.multiply( structMat, Y2new ) * outMat  ) )
-            logDetLadjYnew = np.sum( np.log( evalsLadjYnew ))
-            dualYnew = logDetLadjYnew - np.trace( G * Y2new ) + nState
-
+            evalsLadjYnew = np.real( np.linalg.eigvals( dynMat.H * Y1new + Y1new * dynMat +
+                                        outMat.H * np.multiply( structMat, Y2new ) * outMat  ) )
+            logDetLadjYnew = np.sum( np.log( evalsLadjYnew+0.j ))
+            dualYnew = logDetLadjYnew - np.trace( covMat * Y2new ) + nState
+            #print("evals:",evalsLadjYnew)
+            #print("logdetLadjYnew, dualYnew:", logDetLadjYnew, dualYnew)
             if np.amin( evalsLadjYnew ) < 0.:
-                stepSize *= beta    # Backtrack the step
+                stepSize = stepSize * beta    # Backtrack the step
             elif ( dualYnew < dualY + \
                             np.trace( gradD1 *(Y1new - Y1)) + \
                             np.trace( gradD2 *(Y2new - Y2)) - \
                             (0.5/stepSize) * norm(Y1new - Y1, ord='fro')**2 - \
                             (0.5/stepSize) * norm(Y2new - Y2, ord='fro')**2 ):
                 # Note: Frobenius norm essentially flattens the array and calculates a vector 2-norm
-                stepSize *= beta
+                stepSize = stepSize * beta
             else:
                 break
                 # So this is where we're breaking out of the inner loop
@@ -214,33 +263,39 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
         resPrimalNew1 = dynMat * Xnew + Xnew * dynMat.H + Znew
         resPrimalNew2 = np.multiply( structMat, outMat * Xnew * outMat.H ) - covMat
         resPrimal = np.sqrt( norm( resPrimalNew1, ord='fro')**2 + norm( resPrimalNew2, ord='fro')**2  )
-
+        #print("resPrimal:",resPrimal)
 
         # Calculating the duality gap
         dualGap = - logDetX + rankPar * np.sum( svalsNew) - dualYnew
+        #print("dualGap:",dualGap) 
 
         # Print progress for every 100 outer iterations
+        #if AMAstep%100 == 0:
         if AMAstep%100 == 0:
-            print("%12.2g  %10.2g  %10.2g  %10.2g  %10.2g  %10.2g  %d" %(stepSize1, \
+            print("%8.2g  %8.3g  %10.2g  %10.2g  %10.2g  %7.2g  %d" %(stepSize1, \
                     stepSize, tolPrimal, resPrimal, tolDual, np.abs(dualGap), AMAstep) )
-
+        #pdb.set_trace()
 
         # We start BB stepsize selection now, apparently, whatever that is.. 
         Xnew1 = np.linalg.solve( \
                 dynMat.H * Y1new + Y1new * dynMat + outMat.H * np.multiply( structMat, Y2new) * outMat, \
                 Istate)
+        Xnew1 = np.asmatrix(Xnew1)
         Xnew1 = ( Xnew1 + Xnew1.H )/2.
         gradD1new = dynMat * Xnew1 + Xnew1 * dynMat.H
-        gradD2new = np.multiply( structMat, outMat * Xnew1 * outMat.H) - G
+        gradD2new = np.multiply( structMat, outMat * Xnew1 * outMat.H) - covMat 
+        gradD1new = np.asmatrix(gradD1new); gradD2new = np.asmatrix(gradD2new)
+        Y1new = np.asmatrix(Y1new); Y2new = np.asmatrix(Y2new)
         stepSize1 = np.real(  ( norm(Y1new - Y1, ord='fro')**2 + norm(Y2new - Y2, ord='fro')**2 )/ \
                 ( np.trace( (Y1new - Y1) * (gradD1 - gradD1new) ) + np.trace( (Y2new - Y2) * (gradD2 - gradD2new) )   ) )
+        #print("|Xnew1|, |gradD1new|, |gradD2new|, stepSize1:",det(Xnew1), det(gradD1new), det(gradD2new), stepSize1) 
 
         if (stepSize1 < 0.) or not np.isfinite(stepSize1):
             stepSize1 = stepSize0
             failIters.append(AMAstep)
-
+        #sys.exit()
         # This is the end of the iteration... Apparently
-        funPrimalArr[AMAstep] = -np.log( np.linalg.det( Xnew )) + rankPar * norm(Znew,ord='nuc')
+        funPrimalArr[AMAstep] = -np.log( np.linalg.det( Xnew +0.j)) + rankPar * norm(Znew,ord='nuc')
         funDualArr[AMAstep] = np.real(dualYnew)
         resPrimalArr[AMAstep] = resPrimal
         dualGapArr[AMAstep] = np.abs(dualGap)
