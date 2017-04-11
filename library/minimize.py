@@ -127,7 +127,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     # AMA method for optimization:
     print("Write decorators for timing and logging (have a look at your bookmarks on Chrome)")
     warn("This code currently uses only method AMA. ADMM from the original matlab function hasn't been implemented.")
-    pdb.set_trace()
+    # pdb.set_trace()
 
     # Ignoring some lines from original MATLAB code because I don't see why they're needed (yet)
     evalsLadjY = np.real( np.linalg.eigvals( dynMat.H * Y1 + Y1*dynMat + \

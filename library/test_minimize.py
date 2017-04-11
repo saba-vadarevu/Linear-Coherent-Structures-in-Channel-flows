@@ -20,7 +20,7 @@ Zoutput = np.zeros((N,N))
 # Defining the dynamic, output, and input matrices
 toepArr = np.zeros(N); toepArr[0] = 2.; toepArr[1] = -1.
 toepMat = toeplitz(toepArr)
-pdb.set_trace()
+#pdb.set_trace()
 # Dynamic matrix
 dynMat = np.vstack( ( np.hstack( (Zoutput , Ioutput ) ), 
                       np.hstack( (-toepMat, -Ioutput) ) ) )
