@@ -1,6 +1,42 @@
 import numpy as np
 from warnings import warn
+import sys
 
+def phys2spec(t=100, L=96,M=64,Nx=384,Ny=256,Nz=384,loadPath='./',savePath='./',prefixes=['u','v','w']):
+    """ Read binary file for physical field and write binary file for spectral field
+    Inputs:
+        t (int=100):    Index for time snapshot
+        Nx(int=384):    Number of streamwise nodes in physical data
+        Ny(int=256):    Number of wall-normal nodes in physical data
+        Nz(int=384):    Number of spanwise nodes in physical data
+        loadPath(str='./'): Path where physical binaries are found
+        savePath(str='./'): Path to save spectral binaries to
+        prefixes(list=['u','v','w']):   Fields to read/write at the specified time
+        L (int=96):     Max streamwise Fourier mode to write (write coefficients for -L < l <= L)
+        M (int=64):     Max spanwise Fourier mdoe to write (write coefficients for 0<= m < M)
+    Outputs:
+        None        (Fields written to .dat files)
+        """
+
+    for pfix in prefixes:
+        fName = loadPath+ pfix + '_it%s.dat'%t
+        xRange = np.r_[0:L+1,Nx-1:Nx-L-1:-1]
+        try:
+            with open(fName,'rb') as inFile:
+                uArr = np.fromfile(inFile, dtype=np.float, count=-1)
+            uArr = uArr.reshape((Nx,Ny,Nz))
+            uArrFFcomplex = np.fft.rfftn(uArr, axes=(0,1))/Nx/Ny
+            uArrFFcomplex = uArrFFcomplex[ xRange, :M  ]
+            uArrFFreal = np.concatenate( (np.real(uArrFFcomplex), np.imag(uArrFFcomplex)), axis=2)
+            newName = savePath+ pfix + 'FF_it%s.dat'%t
+
+            with open(newName,'wb') as outFile:
+                uArrFFreal.tofile(outFile)
+            print("Successfully FFTd %s to %s" %(fName,newName))
+        except:
+            print("Could not FFT %s for whatever reason..")
+        sys.stdout.flush()
+    return
 
 def bin2arr(fName, L=96,M=64,N=384):
     """ Read a binary with spectral fields and return a numpy array
