@@ -20,7 +20,7 @@ def phys2spec(t=100, L=96,M=64,Nx=384,Ny=256,Nz=384,loadPath='./',savePath='./',
 
     for pfix in prefixes:
         fName = loadPath+ pfix + '_it%s.dat'%t
-        xRange = np.r_[0:L+1,Nx-1:Nx-L-1:-1]
+        xRange = np.r_[0:L+1,Nx-L:Nx]
         try:
             with open(fName,'rb') as inFile:
                 uArr = np.fromfile(inFile, dtype=np.float, count=-1)
@@ -100,7 +100,7 @@ def phys2onePointSpec(t=1000,Nx=384,Ny=256,Nz=384, L=32,M=16,saveField=True,load
     enerSpec = (np.fft.rfftn( enerPhys, axes=(2,3))/Nx/Ny)
     # real FFT of physical fields for Reynolds stresses
     
-    enerSpec = enerSpec[:, :, np.r_[:L+1, Nx-1:Nx-L-1:-1], :M]
+    enerSpec = enerSpec[:, :, np.r_[:L+1, Nx-L:Nx], :M]
     # Keeping only -L < l <= L and  m <M modes for arguments L and M to the function
 
     if not saveField:
@@ -117,7 +117,6 @@ def phys2onePointSpec(t=1000,Nx=384,Ny=256,Nz=384, L=32,M=16,saveField=True,load
                     enerSpecReal[i1,i2].tofile(outFile)
                 print("Wrote %s 2-d spectra at time %d to %s"%(outNameList[i1,i2],t,outName))
         return None
-
 
 
 
