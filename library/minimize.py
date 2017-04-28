@@ -29,7 +29,7 @@ from warnings import warn
 import sys
 import pdb
 
-def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,optDict=None):
+def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,**optDict):
     """
         Minimizes   -log(|X|) + rankPar  || Z|| 
         subject to  dynMat * X + X * dynMat' + Z = 0
@@ -78,7 +78,8 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     stepSize = optDict.get("stepSize",10.)
     tolPrimal = optDict.get("tolPrimal",1.0e-06)
     tolDual = optDict.get("tolDual",1.0e-06)
-    iterMax = optDict.get("iterMax",1.0e05)
+    iterMax = int(optDict.get("iterMax",1.0e05))
+    printIter = int(optDict.get("printIter",100))
     if isinstance(stepSize, np.ndarray):stepSize = stepSize.flatten()[0]
 
     # Initializing X, Z, Y1, and Y2 for the iterations
@@ -271,7 +272,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
 
         # Print progress for every 100 outer iterations
         #if AMAstep%100 == 0:
-        if AMAstep%100 == 0:
+        if AMAstep%printIter == 0:
             print("%8.2g  %8.3g  %10.2g  %10.2g  %10.2g  %7.2g  %d" %(stepSize1, \
                     stepSize, tolPrimal, resPrimal, tolDual, np.abs(dualGap), AMAstep) )
         #pdb.set_trace()

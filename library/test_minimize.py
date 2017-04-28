@@ -11,7 +11,8 @@ from numpy.linalg import det
 import pdb
 
 # Optimization problem for covariance completion, using a spring-mass-damper system
-N = 11  # Number of masses
+N = 50  # Number of masses
+print("Testing the CC_AMA algorithm for %d masses in a mass-sprint-damper system"%N)
 
 Ioutput = np.identity(N)    # We'll say the outputs are just the positions of the masses
 Istate = np.identity(2*N)   # The state includes positions and velocities of the masses
@@ -72,7 +73,6 @@ structMat = np.asmatrix(structMat)
 # Constraint covariance to be used
 covMat = np.multiply( structMat, Sigma )
 
-print("covMat[0,0] is", covMat[0,0])
 
 
 
@@ -99,7 +99,6 @@ optDict['Z0'] = Z0
 optDict['Y10'] = Y10
 optDict['Y20'] = Y20
 
-print("Determinants of some matrices... dynMat %.3g, outMat %.3g, covMat %.3g, Y10 %.3g" %( det(dynMat),  det(outMat), det(covMat), det(Y10 ) ))
 
-outDict = minimize.minimize( dynMat, outMat=outMat, structMat=structMat, covMat=covMat, optDict=optDict)
+outDict = minimize.minimize( dynMat, outMat=outMat, structMat=structMat, covMat=covMat, optDict=optDict,printIter=500)
 

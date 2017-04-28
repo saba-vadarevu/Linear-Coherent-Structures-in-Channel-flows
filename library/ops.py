@@ -3,6 +3,10 @@ import scipy as sp
 import pseudo 
 from warnings import warn
 import blasius
+import sys
+import minimize
+assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code."
+
 """ 
 ops.py
 Defines linear operators, such as OSS, resolvent, resolvent with eddy, etc... 
@@ -13,7 +17,7 @@ IMPORTANT: Everything here is written only for internal nodes.
 """
 
 class linearize(object):
-    def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel", **kwargs):
+    def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel",Re=10000., **kwargs):
         """
         Initialize OSS class instance. 
         Inputs:
@@ -29,6 +33,7 @@ class linearize(object):
             w:  Weight matrix for defining integral norms. Use as np.dot(w,someFunctionOn_y)
             U, dU, d2U, flowClass:  Mean velocity and its derivatives, and flowClass
             __version__ :   Irrelevant to code, keeps track of development.
+            Re: Reynolds number. Can be either 
         flowClass determines the operators D1, D2 and D4 to be used, and also U and d2U if not supplied.
         If U and d2U are not supplied, initialize with laminar velocity profile
 
@@ -70,10 +75,11 @@ class linearize(object):
         self.__version__ = '3.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
-        self.D1 = D1
+        self.D1 = D1; self.D = D1
         self.D2 = D2
         self.D4 = D4
         self.w  = w
+        self.Re = np.float(Re)
 
         if (U is None):
             if flowClass == "channel":
@@ -108,6 +114,7 @@ class linearize(object):
 
         print("Initialized instance of 'linearize', version %s." %(self.__version__),
                 "New in this version: diffmats and OSS validated for channel and BL LSA. ",
+                "Re is now a class attribute. Use the appropriate one depending on what velocity is used for scaling U,dU,d2U.",
                 "To fix: channel routines in pseudo.py to ignore wall-nodes, ",
                 "To fix: Eddy viscosity, resolvent, and svd are currently not supported.",sep="\n")
 
@@ -174,8 +181,8 @@ class linearize(object):
     def OS(self, **kwargs):
         """ Define the Orr-Sommerfeld operator matrix (without the Squire equations). 
         Inputs:
-            kwargs: Dictionary containing wavenumbers and Re
-                        Defaults are (a,b,Re) = (1., 0., 10000.)
+            kwargs: Dictionary containing wavenumbers
+                        Defaults are (a,b) = (1., 0.)
         Outputs:
             OS matrix
         What this OS matrix is is given in function comments.
@@ -188,7 +195,7 @@ class linearize(object):
 
         a = kwargs.get('a', 1.)
         b = kwargs.get('b', 0.)
-        Re= kwargs.get('Re',10000.)
+        Re= self.Re 
         k2 = a**2 + b**2
 
         # We build the matrix only for internal nodes, so use N-2
@@ -223,8 +230,8 @@ class linearize(object):
     def OSS(self, **kwargs):
         """ Define the Orr-Sommerfeld Squire operator matrix. 
         Inputs:
-            kwargs: Dictionary containing wavenumbers and Re
-                        Defaults are (a,b,Re) = (1., 0., 10000.)
+            kwargs: Dictionary containing wavenumbers 
+                        Defaults are (a,b) = (1., 0.)
         Outputs:
             OSS matrix
         What this OSS matrix is is given in function comments.
@@ -236,7 +243,7 @@ class linearize(object):
 
         a = kwargs.get('a', 1.)
         b = kwargs.get('b', 0.)
-        Re= kwargs.get('Re',10000.)
+        Re= self.Re
         k2 = a**2 + b**2
 
         # We build the matrix only for internal nodes, so use N-2
@@ -253,24 +260,59 @@ class linearize(object):
         # U and d2U have to be diagonal matrices to multiply other matrices
      
         # The linearized equation looks like this (from Schmid & Henningson, 2001)
-        # -i.omega [k^2 - D2,   Z]  [vel]  +  [LOS   ,  Z  ] [vel]  = [0]
-        #          [Z,          I]  [vor]     [i.b.dU,  LSQ] [vor]  = [0]
+        # -i.omega  [vel]  +  [DeltaInv* LOS ,  Z  ] [vel]  = [0]
+        #           [vor]     [i.b.dU        ,  LSQ] [vor]  = [0]
 
-        # where LOS = i.a.U.(k^2-D2) + i.a.d2U + 1/Re . (k^2 - D^2)^2
-        #               I think a + 2.i.a.dU is missing in the above expression
+        # where LOS =  i.a.U.(k^2-D2) + i.a.d2U + 1/Re . (k^2 - D^2)^2
+        #               I think a "+ 2.i.a.dU" is missing in the above expression, but no one uses it, so maybe it's bad arithmetic on my part.
         #       LSQ = i.a.U  + 1/Re . (k^2 - D^2)
+
         LOS  = 1.j*a*np.dot(U_ , (k2*I - D2_ ))  + 1.j*a* d2U_ + (1./Re) * (k2*k2*I - 2.*k2*D2_ + D4_ )
+        DeltaMat = k2*I-D2_         # It's actually the negative of the Laplacian
+        LOS = np.linalg.solve(DeltaMat, I) @  LOS
 
         LSQ  = 1.j*a*U_  + (1./Re)* (k2*I - D2_ )
         #LSQ = -LSQ
 
-        OSS0 =  np.vstack( ( np.hstack( (LOS      , Z  ) ),\
-                             np.hstack( (1.j*b*dU_, LSQ) ) )  )
+        OSS =  np.vstack( ( np.hstack( (LOS       , Z   ) ),\
+                            np.hstack( (1.j*b*dU_,  LSQ) ) )  )
 
-        LHSmat = np.vstack( ( np.hstack( (k2*I-D2_, Z) ),\
-                              np.hstack( (Z       , I) ) ) )
+
+        return OSS
+
+    def dynamicsMat(self,**kwargs):
+        """ The dynamics matrix relating velocity-vorticity to their time-derivatives:
+            [w_t, eta_t] = A [w,eta].
+            This dynamics matrix A is the negative of the OSS matrix, because OSS is defined as
+                -i*omega* [w , eta]^T + OSS * [w,eta]^T = 0
+
+        """
+        return -self.OSS(**kwargs)
+
+    def velVor2primitivesMat(self,**kwargs):
+        """ Defines a matrix convertMat: [u,v,w]^T = convertMat @ [w,eta]^T.
+        v is spanwise, w is wall-normal. 
+        Input: 
+            dict with wavenumbers (a,b) = (1,0) 
+        Output:
+            3N x 2N matrix convertMat """
+        warn("z,w represent wall-normal, and y,v represent spanwise.")
+
+        a = kwargs.get('a', 1.)
+        b = kwargs.get('b', 0.)
         
-        return np.dot(  np.linalg.inv(LHSmat), OSS0)
+        Z = np.zeros((self.N, self.N), dtype=np.complex)
+        I = np.identity(self.N, dtype=np.complex)
+
+        convertMat = np.vstack((
+            np.hstack(( 1.j*a*self.D, -1.j*b*I )),
+            np.hstack(( 1.j*b*self.D,  1.j*a*I )),
+            np.hstack(( (a**2+b**2)*I,    Z    ))  ))
+
+        convertMat = convertMat/(a**2 + b**2)
+
+        return convertMat
+        
 
     def resolvent(self,**kwargs):
         pass
@@ -298,3 +340,102 @@ class linearize(object):
 
     def svd(self, mat, weighted=True): 
         pass
+
+   
+
+class statComp(linearize):
+    def __init__(self,a=2.,b=8.,**kwargs):
+        """
+        Initialize a case for covariance completion. 
+        Inherits class 'linearize'. See this class for input arguments.
+        The extra inputs are the streamwise and spanwise wavenumbers, a,b.
+        Attributes: 
+            N (no. of nodes), y (node location) 
+            D1, D2, D4: Differentiation matrices
+            w:  Weight matrix for defining integral norms. Use as np.dot(w,someFunctionOn_y)
+            U, dU, d2U, flowClass:  Mean velocity and its derivatives, and flowClass
+            __version__ :   Irrelevant to code, keeps track of development.
+            a,b,Re: wavenumbers and Reynolds number. 
+            covMat: Covariance matrix from DNS
+            
+        flowClass determines the operators D1, D2 and D4 to be used, and also U and d2U if not supplied.
+        If U and d2U are not supplied, initialize with laminar velocity profile
+
+        Inputs:
+            All the keyword args as linearize, and
+            a (float=2.): Streamwise wavenumber
+            b (float=7.): Spanwise wavenumber
+            In kwargs:
+                u,v,w: Fourier coefficients from DNS
+
+        Methods:
+            dynamicsMat (weighted negative of the OSS matrix)
+            outputMat   (weighted matrix for converting velocity vorticity to velocities)
+        """
+        super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
+        self.a = a
+        self.b = b
+        if not ( ('u' in kwargs) and ('v' in kwargs) and ('w' in kwargs) ):
+            warn("Need Fourier coefficients for u,v,w from DNS for statistics completion. Have you supplied these? Using zeroes for non-supplied fields instead.")
+        self.uf = kwargs.get('u', np.zeros(self.N,dtype=np.complex))
+        self.vf = kwargs.get('v', np.zeros(self.N,dtype=np.complex))
+        self.wf = kwargs.get('w', np.zeros(self.N,dtype=np.complex))
+
+        if ('structMat' not in kwargs) or (not isinstance(kwargs['structMat'], np.ndarray)):
+            print("structMat has not been supplied or is not a numpy array. Using one-point covariances for uu, and vv, as well as the Reynolds shear stresses. Ignoring ww.")
+            structMat = np.identity(3*self.N)
+            N = self.N
+            structMat[range(N,3*N), range(2*N)] = 1
+            structMat[range(2*N,3*N), range(N)] = 1
+            structMat[range(2*N), range(N,3*N)] = 1
+            structMat[range(N), range(2*N,3*N)] = 1
+            structMat[range(2*N,3*N), range(2*N,3*N)] = 0   # Ignoring ww one-point
+            self.structMat = structMat
+
+
+        else:
+            self.structMat = kwargs['structMat']
+
+
+        return
+
+    def dynamicsMat(self):
+        """ The dynamics matrix describing evolution of [w,eta]^T at (self.a, self.b).
+        It is the negative of the weighted OSS operator.
+        """
+        return -self._weightMat( self.OSS(a=self.a, b=self.b) )
+
+    def outputMat(self):
+        """ The output matrix to get [Qu,Qv,Qw] from [Qw,Q eta] at (self.a, self.b).:w
+        Q is the weight matrix so that ||(Qu)* Qu||_2 gives the energy of u.
+        """
+        unWeightedOutMat = self.velVor2primitivesMat(a=self.a, b=self.b)
+        return self._weightMat(unWeightedOutMat)
+
+    def covMat(self):
+        """ Covariance matrix from DNS data (attributs of the class, self.uf, self.vf, self.wf).
+        Note that this is defined for weighted velocities."""
+        velArr = np.concatenate(( self.uf, self.vf, self.wf ))
+        velArrWeighted = self._weightVec(velArr).reshape((velArr.size,1))
+        # Weight the velocities and reshape to a column vector
+
+        covMat =  velArrWeighted @ velArrWeighted.conj().T
+        # Matrix multiplication of column vector and row vector (hermitian of weighted velocities).
+        return covMat
+
+    def completeStats(self,**kwargs):
+        """ Completed statistics. Output is a dict with keys:
+        X: Completed covariance matrix
+        Z: RHS of the Lyapunov equation
+        Y1, Y2: Show up in the AMA algorithm. Not important.
+        flag: Convergence flag
+        steps: Number of steps at exist of AMA
+        funPrimalArr, funDualArr: evaluations of the primal and dual residual functions at each step
+        dualGapArr: Expected difference between primal and dual formulation."""
+
+        statsOut = minimize.minimize( self.dynamicsMat(),
+                outMat = self.outputMat(), structMat = self.structMat,
+                covMat = self.covMat(), rankPar = 50.,**kwargs)
+
+        return statsOut
+
