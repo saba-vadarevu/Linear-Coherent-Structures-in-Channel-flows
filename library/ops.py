@@ -5,6 +5,7 @@ from warnings import warn
 import blasius
 import sys
 import minimize
+import os
 import h5py
 assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code."
 
@@ -16,7 +17,7 @@ Problem definition must be supplied with keyword arguments
 IMPORTANT: Everything here is written only for internal nodes. 
             Variables at the wall are always ignored. 
 """
-covDataDir = '/media/sabarish/channelData/R590/cov/'
+covDataDir = os.environ['DATA']+ 'cov/'
 class linearize(object):
     def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel",Re=10000., **kwargs):
         """
