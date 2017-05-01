@@ -11,13 +11,15 @@ import numpy as np
 import os
 import pseudo
 import sys
-dataPath = '/home/sabarish/tmp/'
-savePath = '/home/sabarish/tmp/cov/'
+dataPath = '/media/sabarish/channelData/R590/spec/'
+savePath = '/media/sabarish/channelData/R590/cov/'
 fNamePrefix = 'covR590'
+currPath = os.getcwd()
 os.chdir(dataPath)
 
-lArr = np.arange(32)
-mArr = np.arange(1) 
+uff = miscUtil.bin2arr(dataPath+'uFF_it50000.dat')
+lArr = np.arange(uff.shape[0])
+mArr = np.arange(uff.shape[1]) 
 N = 384
 Nlow = 64
 interpFlag = True   #Interpolate onto low res grid
@@ -33,20 +35,19 @@ else:
 q = np.sqrt(w)
 Q = np.diag( q.repeat(3) )  # Weight matrix for weighting vectors
 
-tRange = np.arange(40000, 75000,500)
+tRange = np.arange(50000, 75050,50)
 uFiles = ['uFF_it%s.dat'%t for t in tRange]
 vFiles = ['vFF_it%s.dat'%t for t in tRange]
 wFiles = ['wFF_it%s.dat'%t for t in tRange]
 
 uffLow = np.zeros( (lArr.size, mArr.size, 1,N+2), dtype=np.complex )
 vffLow = uffLow.copy(); wffLow = uffLow.copy()
+velLow_1 = np.zeros( (lArr.size, mArr.size, 3, N+2), dtype=np.complex)
 
 U = np.zeros(N)
+Ulow = np.zeros(Nlow)
 for fInd in range(len(uFiles)):
     uff = miscUtil.bin2arr(uFiles[fInd])
-    U[:] += np.real(uff[0,0])
-U = U/len(uFiles)
-np.save('uMean.npy',U)
 #sys.exit()
 for fInd in range(len(uFiles)):
     uff = miscUtil.bin2arr(uFiles[fInd])
@@ -54,10 +55,13 @@ for fInd in range(len(uFiles)):
     wff = miscUtil.bin2arr(wFiles[fInd])
   
     # uff, vff, wff only have internal nodes. Need to extend with wall nodes for interpolation.
-    uffLow[:,:,:,1:-1] = uff[:-lArr.size-1:-1, :mArr.size].reshape(( lArr.size, mArr.size, 1,N))
-    vffLow[:,:,:,1:-1] = vff[:-lArr.size-1:-1, :mArr.size].reshape(( lArr.size, mArr.size, 1,N))
-    wffLow[:,:,:,1:-1] = wff[:-lArr.size-1:-1, :mArr.size].reshape(( lArr.size, mArr.size, 1,N))
-    velLow_1 = np.concatenate( (uffLow, vffLow, wffLow), axis=2)
+    # uffLow[:,:,:,1:-1] = uff[np.ix_(lArr,mArr)].reshape(( lArr.size, mArr.size, 1,N))
+    # vffLow[:,:,:,1:-1] = vff[np.ix_(lArr,mArr)].reshape(( lArr.size, mArr.size, 1,N))
+    # wffLow[:,:,:,1:-1] = wff[np.ix_(lArr,mArr)].reshape(( lArr.size, mArr.size, 1,N))
+    velLow_1[:,:,0,1:-1] = uff
+    velLow_1[:,:,1,1:-1] = vff
+    velLow_1[:,:,2,1:-1] = wff
+    U[:] += np.real(uff[0,0])
     if interpFlag:
         # Interpolating to low-res grid, 
         # going through chebcoeffs and then cutting them off instead of using barycentric thingy
@@ -78,20 +82,25 @@ for fInd in range(len(uFiles)):
             velVecWeighted = (Q @ velVecUnweighted).reshape((3*Nlow,1))
             covMat[l,m] += (velVecWeighted @ velVecWeighted.conj().T).reshape((3*Nlow,3*Nlow))
 
+U = U/len(uFiles)
+np.save('uMeanN384.npy',U)
+
 covMat = covMat/len(uFiles)
 assert covMat.shape== (lArr.size,mArr.size,3*Nlow, 3*Nlow)
 
 # Save covariance matrix for each mode as a numpy binary
 for l in lArr:
+    if l <=96: lp = l
+    else: lp = l-192
     for m in mArr:
         covMatMode = covMat[l,m]
-        fName = fNamePrefix + 'N%dl%02dm%02d.npy'%(Nlow,-l-1,m)
+        fName = fNamePrefix + 'N%dl%02dm%02d.npy'%(Nlow,lp,m)
         np.save(savePath+fName, covMatMode)
-        print("Saved covariance for mode (%d,%d) to %s"%(-l-1,m,fName))
+        print("Saved covariance for mode (%d,%d) to %s"%(lp,m,fName))
 
 
 
 
-
+os.chdir(currPath)
 
 

@@ -28,6 +28,7 @@ from numpy.linalg import det
 from warnings import warn
 import sys
 import pdb
+import h5py
 
 def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,**optDict):
     """
@@ -330,6 +331,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     outDict['funPrimalArr'] = funPrimalArr[:AMAstep]
     outDict['funDualArr'] = funDualArr[:AMAstep]
     outDict['dualGapArr'] = dualGapArr[:AMAstep]
+
 
     return outDict
 

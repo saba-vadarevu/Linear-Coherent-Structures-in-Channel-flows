@@ -5,6 +5,7 @@ from warnings import warn
 import blasius
 import sys
 import minimize
+import h5py
 assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code."
 
 """ 
@@ -15,7 +16,7 @@ Problem definition must be supplied with keyword arguments
 IMPORTANT: Everything here is written only for internal nodes. 
             Variables at the wall are always ignored. 
 """
-
+covDataDir = '/media/sabarish/channelData/R590/cov/'
 class linearize(object):
     def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel",Re=10000., **kwargs):
         """
@@ -72,7 +73,7 @@ class linearize(object):
             w = pseudo.clencurt(N+2)      # Weights matrix
             w = w[1:-1]
        
-        self.__version__ = '3.1'    # m.c, m is month and c is major commit in month
+        self.__version__ = '4.2'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -344,7 +345,7 @@ class linearize(object):
    
 
 class statComp(linearize):
-    def __init__(self,a=2.,b=8.,**kwargs):
+    def __init__(self,a=2.,b=4.,**kwargs):
         """
         Initialize a case for covariance completion. 
         Inherits class 'linearize'. See this class for input arguments.
@@ -364,9 +365,10 @@ class statComp(linearize):
         Inputs:
             All the keyword args as linearize, and
             a (float=2.): Streamwise wavenumber
-            b (float=7.): Spanwise wavenumber
+            b (float=4.): Spanwise wavenumber
             In kwargs:
-                u,v,w: Fourier coefficients from DNS
+                covMat: Covariance matrix from DNS 
+                structMat: Matrix that decides which entries of covMat are used as constraint
 
         Methods:
             dynamicsMat (weighted negative of the OSS matrix)
@@ -375,24 +377,25 @@ class statComp(linearize):
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
         self.a = a
         self.b = b
-        if not ( ('u' in kwargs) and ('v' in kwargs) and ('w' in kwargs) ):
-            warn("Need Fourier coefficients for u,v,w from DNS for statistics completion. Have you supplied these? Using zeroes for non-supplied fields instead.")
-        self.uf = kwargs.get('u', np.zeros(self.N,dtype=np.complex))
-        self.vf = kwargs.get('v', np.zeros(self.N,dtype=np.complex))
-        self.wf = kwargs.get('w', np.zeros(self.N,dtype=np.complex))
+        if 'covMat' not in kwargs:
+            covfName = 'covR590N64l%02dm%02d.npy'%(a,b//2)
+            covMat = np.load(covDataDir+covfName)
+            print("covMat was not supplied. Loaded matrix from %s ..."%(covDataDir+covfName))
+        else:
+            covMat = kwargs['covMat']
+        assert covMat.shape == (3*self.N, 3*self.N)
+        self.covMat = covMat
 
         if ('structMat' not in kwargs) or (not isinstance(kwargs['structMat'], np.ndarray)):
-            print("structMat has not been supplied or is not a numpy array. Using one-point covariances for uu, and vv, as well as the Reynolds shear stresses. Ignoring ww.")
-            structMat = np.identity(3*self.N)
+            print("structMat has not been supplied or is not a numpy array. Using one-point covariances for uu, vv, and ww, as well as the Reynolds shear stresses.")
+            structMat = np.identity(3*self.N)   # All one-point normal stresses
             N = self.N
-            structMat[range(N,3*N), range(2*N)] = 1
-            structMat[range(2*N,3*N), range(N)] = 1
-            structMat[range(2*N), range(N,3*N)] = 1
-            structMat[range(N), range(2*N,3*N)] = 1
-            structMat[range(2*N,3*N), range(2*N,3*N)] = 0   # Ignoring ww one-point
+            structMat[range(N,3*N), range(2*N)] = 1     # One-point vu and wv
+            structMat[range(2*N,3*N), range(N)] = 1     # One-point wu
+            structMat[range(2*N), range(N,3*N)] = 1     # One-point uv and vw
+            structMat[range(N), range(2*N,3*N)] = 1     # One-point uw
+            #structMat[range(2*N,3*N), range(2*N,3*N)] = 0   # Ignoring ww one-point
             self.structMat = structMat
-
-
         else:
             self.structMat = kwargs['structMat']
 
@@ -412,30 +415,48 @@ class statComp(linearize):
         unWeightedOutMat = self.velVor2primitivesMat(a=self.a, b=self.b)
         return self._weightMat(unWeightedOutMat)
 
-    def covMat(self):
-        """ Covariance matrix from DNS data (attributs of the class, self.uf, self.vf, self.wf).
-        Note that this is defined for weighted velocities."""
-        velArr = np.concatenate(( self.uf, self.vf, self.wf ))
-        velArrWeighted = self._weightVec(velArr).reshape((velArr.size,1))
-        # Weight the velocities and reshape to a column vector
 
-        covMat =  velArrWeighted @ velArrWeighted.conj().T
-        # Matrix multiplication of column vector and row vector (hermitian of weighted velocities).
-        return covMat
-
-    def completeStats(self,**kwargs):
-        """ Completed statistics. Output is a dict with keys:
-        X: Completed covariance matrix
-        Z: RHS of the Lyapunov equation
-        Y1, Y2: Show up in the AMA algorithm. Not important.
-        flag: Convergence flag
-        steps: Number of steps at exist of AMA
-        funPrimalArr, funDualArr: evaluations of the primal and dual residual functions at each step
-        dualGapArr: Expected difference between primal and dual formulation."""
-
+    def completeStats(self,savePrefix='outStats',**kwargs):
+        """ Completed statistics. 
+        Inputs:
+            savePrefix (='outStats'):   If not None, save output of stat completion (see below), along with self.a, self.b, self.Re, self.N as attributes in a hdf5 file.
+            kwargs:     Optional keyword arguments. Can include key 'savePath' 
+        Outputs:
+            Output is a dict with keys:
+            X: Completed covariance matrix
+            Z: RHS of the Lyapunov equation
+            Y1, Y2: Show up in the AMA algorithm. Not important.
+            flag: Convergence flag
+            steps: Number of steps at exit of AMA
+            funPrimalArr, funDualArr: evaluations of the primal and dual residual functions at each step
+            dualGapArr: Expected difference between primal and dual formulation."""
+        kwargs['rankPar'] = kwargs.get('rankPar',200.)
         statsOut = minimize.minimize( self.dynamicsMat(),
                 outMat = self.outputMat(), structMat = self.structMat,
-                covMat = self.covMat(), rankPar = 50.,**kwargs)
+                covMat = self.covMat, **kwargs)
+        if savePrefix is not None:
+            fName = kwargs.get('savePath','') + savePrefix
+            fName = fName + 'R%dN%da%02db%02d.hdf5'%(self.Re, self.N, self.a, self.b)
+            try:
+                with h5py.File(fName,"w") as outFile:
+                    outStats = outFile.create_dataset("outStats",data=statsOut['X'],compression='gzip')
+
+                    for key in self.__dict__.keys():
+                        # Saving all attributes of the class instance for later regeneration
+                        if isinstance(self.__dict__[key], np.ndarray):
+                            outFile.create_dataset(key, data=self.__dict__[key],compression='gzip')
+                        else:
+                            outStats.attrs[key] = self.__dict__[key]
+                    for key in statsOut.keys():
+                        # Saving output statistics
+                        if isinstance(statsOut[key], np.ndarray):
+                            outFile.create_dataset(key, data=statsOut[key],compression='gzip')
+                        else:
+                            outStats.attrs[key] = statsOut[key]
+
+                print("saved statistics to ",fName)
+            except:
+                print("Could not save output stats for whatever reason..")
 
         return statsOut
 
