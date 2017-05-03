@@ -276,6 +276,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
         if AMAstep%printIter == 0:
             print("%8.2g  %8.3g  %10.2g  %10.2g  %10.2g  %7.2g  %d" %(stepSize1, \
                     stepSize, tolPrimal, resPrimal, tolDual, np.abs(dualGap), AMAstep) )
+            sys.stdout.flush()
         #pdb.set_trace()
 
         # We start BB stepsize selection now, apparently, whatever that is.. 

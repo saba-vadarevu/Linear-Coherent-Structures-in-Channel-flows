@@ -375,6 +375,7 @@ class statComp(linearize):
             dynamicsMat (weighted negative of the OSS matrix)
             outputMat   (weighted matrix for converting velocity vorticity to velocities)
         """
+        kwargs['Re'] = kwargs.get('Re',590.)    # If ReTau is not supplied, use 590
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
         self.a = a
         self.b = b
@@ -432,6 +433,8 @@ class statComp(linearize):
             funPrimalArr, funDualArr: evaluations of the primal and dual residual functions at each step
             dualGapArr: Expected difference between primal and dual formulation."""
         kwargs['rankPar'] = kwargs.get('rankPar',200.)
+        print("Parameters of the statComp instance are:")
+        print("a:%.2g, b:%.2g, Re:%d, N:%d, rankPar:%.1g"%(self.a, self.b, self.Re, self.N, kwargs['rankPar']))
         statsOut = minimize.minimize( self.dynamicsMat(),
                 outMat = self.outputMat(), structMat = self.structMat,
                 covMat = self.covMat, **kwargs)
@@ -460,4 +463,31 @@ class statComp(linearize):
                 print("Could not save output stats for whatever reason..")
 
         return statsOut
+
+
+
+def loadStatComp(fName):
+    """ Create statComp instance from an earlier run saved/dumped as a hdf5 file
+    Inputs:
+        fName
+    Outputs:
+        statComp instance"""
+    with h5py.File(fName,"r") as inFile:
+        outStats = inFile['outStats']
+        # All floats such as a,b,Re,.. are attributes of outStats
+        # All arrays and matrices are datasets in inFile
+
+        # Basic initialization of statComp instance:
+        statInst = statComp(a=outStats.a, b=outStats.b, Re=outStats.Re, N=outStats.N, flowClass=outStats.flowClass)
+
+        # Add mean velocity and its derivatives as attributes
+        statInst.U = inFile['U']
+        statInst.dU = inFile['dU']
+        statInst.d2U = inFile['d2U']
+    return
+
+        
+        
+
+        
 

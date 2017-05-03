@@ -40,7 +40,8 @@ statInst.d2U = statInst.D2 @ U
 ##==========================================================
 # Iterate for stat completion
 outStats = statInst.completeStats(
-        iterMax=10000,
+        iterMax=100000,
         tolPrimal=1.0e-03,
         tolDual=1.0e-03,
+        printIter=500,
         savePath='../')
