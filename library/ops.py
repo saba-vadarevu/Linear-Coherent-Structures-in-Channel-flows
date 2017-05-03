@@ -465,6 +465,113 @@ class statComp(linearize):
         return statsOut
 
 
+    def decomposeZ(self, Z=None, **kwargs):
+        """ Refer to the non-class function decompose Z in this module"""
+        if not hasattr(self,Z): self.Z = Z
+        self.B, self.H, self.S = decomposeZ(self.Z,**kwargs)
+        return
+
+def decomposeZ(Z=None, **kwargs):
+    """ Decompose Z = BH* + HB*
+    Following Qdecomposition of Zare and Jovanovic
+    Inputs:
+        Z:  The Lyapunov matrix
+            Can also be an attribute of self
+    Outputs:
+        None. Populates the following attributes of self:
+            B:  Input matrix
+            H:  Forcing covariance
+            S:  (= BH*)
+    """
+    Z = np.ndarray(Z)   # Use np.ndarray instead of np.matrix, for consistency
+    # Z is supposed to be a normal matrix. But just to get rid of any errors,
+    Z = (Z + Z.conj().T)/2.
+    n,m = Z.shape
+
+    normZ = np.linalg.norm(Z, ord=2)    # Max singular value
+    threshold = kwargs.get('threshold',1.0e-12) * normZ
+    # eigvals with abs less than threshold will be considered to be zeros
+
+    # Eigenvalue decomposition of Z
+    evals, evecs = np.linalg.eig(Z)
+    # Note: evals is a 1-d array, unlike MATLAB's diagonal matrix
+    # evals are all real because Z is a normal matrix
+
+    # Signature of Z, i.e. number of positive (piZ), negative (nuZ), and zero (deltaZ) eigenvalues
+    piZ = np.sum( ( evals > threshold ).astype(np.int))
+    nuZ = np.sum( ( evals < -threshold).astype(np.int))
+    deltaZ  = n - piZ - nuZ
+
+
+    # Set diagonal entries to 1, -1, or 0 according to the signature, call this D1
+    #       See Zare 2016, Low complexity modelling ......
+    evals1pi = np.diag( (evals > threshold).astype(np.int) )
+    evals1nu =-np.diag( (evals <-threshold).astype(np.int) )
+    evals1all   = evals1pi + evals1nu  # Positive evals set to 1, negatives to -1, zeros stay 0
+
+    # Weight the eigenvectors by sqrt(|evals|) to account for the above change
+    evalspi = np.diag(evals) * evals1pi     # Diagonal matrix with only evals>0
+    evalsnu = np.diag(evals) * evals1nu     # Diagmat with only evals < 0
+    evals_tmp = evalspi + evalsnu + ( np.identity(n) - np.abs(D1all) )
+        # abs(evals) whenever evals != 0, 1 when evals=0
+    evecsW = evecs @ np.sqrt(evals_tmp)  # evecs weighted by sqrt(|evals|) for evals != 0
+
+
+    # Sort evals, and reorder evecs accordingly
+    piZind = np.nonzero( np.diag(evals1pi) )    # Indices for evals > 0
+    nuZind = np.nonzero( np.diag(evals1nu) )    # Indices for evals < 0
+    deltaZind = np.nonzero(  np.identity(n) - np.abs(evals1all) )   # for evals = 0
+
+    reorderInd = np.concatenate( (piZind, nuZind, deltaZind) )
+
+    evals1Sorted = np.diag( np.concatenate(
+                        np.ones(piZ), -np.ones(nuZ), np.zeros(deltaZ) ))
+    # Eigenvalues (1s, -1s, and 0s) sorted 
+
+    evecsSorted = evecsW[:,reorderInd]
+    # Weighted evecs sorted according to evals
+
+
+    # Compute B, H, and S (refer to Zare 2016)
+    evals1Sorted = 2.* evals1Sorted
+    evecsSorted = np.sqrt(0.5) * evecsSorted
+
+    if piZ <= nuZ:
+        diffZ = nuZ - piZ
+        Bhat = np.vstack(( 
+            np.hstack(( np.identity(piZ),   np.zeros((piZ, diffZ))  )),
+            np.hstack(( np.identity(piZ),   np.zeros((piZ, diffZ))  )),
+            np.hstack(( np.zeros((diffZ,piZ)),np.identity(diffZ)    )),
+            np.zeros(( deltaZ, nuZ )) 
+            ))
+        Hhat = np.vstack(( 
+            np.hstack(( np.identity(piZ),   np.zeros((piZ, diffZ))  )),
+            np.hstack((-np.identity(piZ),   np.zeros((piZ, diffZ))  )),
+            np.hstack(( np.zeros((diffZ,piZ)),-np.identity(diffZ)   )),
+            np.zeros(( deltaZ, nuZ )) 
+            ))
+    else:
+        diffZ = piZ - nuZ
+        Bhat = np.vstack((
+            np.hstack(( np.identity(diffZ),     np.zeros(( diffZ, nuZ ))    )),
+            np.hstack(( np.zeros((nuZ,diffZ)),  np.identity(nuZ)            )),
+            np.hstack(( np.zeros((nuZ,diffZ)),  np.identity(nuZ)            )),
+            np.zeros((deltaZ,piZ))
+            ))
+        Hhat = np.vstack((
+            np.hstack(( np.identity(diffZ),     np.zeros(( diffZ, nuZ ))    )),
+            np.hstack(( np.zeros((nuZ,diffZ)),  np.identity(nuZ)            )),
+            np.hstack(( np.zeros((nuZ,diffZ)), -np.identity(nuZ)            )),
+            np.zeros((deltaZ,piZ))
+            ))
+    
+    B = evecsSorted @ Bhat
+    H = evecsSorted @ Hhat
+    S = B @ H
+
+    return B,H,S
+
+
 
 def loadStatComp(fName):
     """ Create statComp instance from an earlier run saved/dumped as a hdf5 file
