@@ -471,7 +471,7 @@ class statComp(linearize):
         self.B, self.H, self.S = decomposeZ(self.Z,**kwargs)
         return
 
-def decomposeZ(Z=None, **kwargs):
+def decomposeZ(Z, **kwargs):
     """ Decompose Z = BH* + HB*
     Following Qdecomposition of Zare and Jovanovic
     Inputs:
@@ -483,7 +483,7 @@ def decomposeZ(Z=None, **kwargs):
             H:  Forcing covariance
             S:  (= BH*)
     """
-    Z = np.ndarray(Z)   # Use np.ndarray instead of np.matrix, for consistency
+    Z = np.asarray(Z)   # Use np.ndarray instead of np.matrix, for consistency
     # Z is supposed to be a normal matrix. But just to get rid of any errors,
     Z = (Z + Z.conj().T)/2.
     n,m = Z.shape
@@ -512,20 +512,20 @@ def decomposeZ(Z=None, **kwargs):
     # Weight the eigenvectors by sqrt(|evals|) to account for the above change
     evalspi = np.diag(evals) * evals1pi     # Diagonal matrix with only evals>0
     evalsnu = np.diag(evals) * evals1nu     # Diagmat with only evals < 0
-    evals_tmp = evalspi + evalsnu + ( np.identity(n) - np.abs(D1all) )
+    evals_tmp = evalspi + evalsnu + ( np.identity(n) - np.abs(evals1all) )
         # abs(evals) whenever evals != 0, 1 when evals=0
     evecsW = evecs @ np.sqrt(evals_tmp)  # evecs weighted by sqrt(|evals|) for evals != 0
 
 
     # Sort evals, and reorder evecs accordingly
-    piZind = np.nonzero( np.diag(evals1pi) )    # Indices for evals > 0
-    nuZind = np.nonzero( np.diag(evals1nu) )    # Indices for evals < 0
-    deltaZind = np.nonzero(  np.identity(n) - np.abs(evals1all) )   # for evals = 0
+    piZind = np.nonzero( np.diag(evals1pi) )[0]    # Indices for evals > 0
+    nuZind = np.nonzero( np.diag(evals1nu) )[0]    # Indices for evals < 0
+    deltaZind = np.nonzero(  np.identity(n) - np.abs(evals1all) )[0]   # for evals = 0
 
     reorderInd = np.concatenate( (piZind, nuZind, deltaZind) )
 
-    evals1Sorted = np.diag( np.concatenate(
-                        np.ones(piZ), -np.ones(nuZ), np.zeros(deltaZ) ))
+    evals1Sorted = np.diag( np.concatenate((
+                        np.ones(piZ), -np.ones(nuZ), np.zeros(deltaZ) )) )
     # Eigenvalues (1s, -1s, and 0s) sorted 
 
     evecsSorted = evecsW[:,reorderInd]
@@ -567,7 +567,7 @@ def decomposeZ(Z=None, **kwargs):
     
     B = evecsSorted @ Bhat
     H = evecsSorted @ Hhat
-    S = B @ H
+    S = B @ H.conj().T
 
     return B,H,S
 

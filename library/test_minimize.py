@@ -9,6 +9,7 @@ from scipy.linalg import toeplitz
 from scipy.linalg import solve_lyapunov
 from numpy.linalg import det
 import pdb
+import ops
 
 # Optimization problem for covariance completion, using a spring-mass-damper system
 N = 50  # Number of masses
@@ -101,4 +102,10 @@ optDict['Y20'] = Y20
 
 
 outDict = minimize.minimize( dynMat, outMat=outMat, structMat=structMat, covMat=covMat, optDict=optDict,printIter=500)
+
+#-----------------------------------------------------------------------------
+# Verify Z = BH* + HB* decomposition
+Z = outDict['Z']
+B,H,S = ops.decomposeZ(Z)
+
 
