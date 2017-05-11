@@ -7,6 +7,7 @@ import sys
 import minimize
 import os
 import h5py
+from scipy.integrate import quad
 assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code."
 
 """ 
@@ -74,7 +75,7 @@ class linearize(object):
             w = pseudo.clencurt(N+2)      # Weights matrix
             w = w[1:-1]
        
-        self.__version__ = '4.2'    # m.c, m is month and c is major commit in month
+        self.__version__ = '5.2.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -346,7 +347,7 @@ class linearize(object):
    
 
 class statComp(linearize):
-    def __init__(self,a=2.,b=4.,**kwargs):
+    def __init__(self,a=0.25,b=2./3.,**kwargs):
         """
         Initialize a case for covariance completion. 
         Inherits class 'linearize'. See this class for input arguments.
@@ -375,11 +376,17 @@ class statComp(linearize):
             dynamicsMat (weighted negative of the OSS matrix)
             outputMat   (weighted matrix for converting velocity vorticity to velocities)
         """
-        kwargs['Re'] = kwargs.get('Re',590.)    # If ReTau is not supplied, use 590
+        kwargs['Re'] = kwargs.get('Re',186.)    # If ReTau is not supplied, use 186 
+        kwargs['N'] = kwargs.get('N', 48)
+        if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') is 'channel'):
+            outDict = turbMeanChannel(**kwargs)
+            kwargs.update(outDict)
+
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
         self.a = a
         self.b = b
         if 'covMat' not in kwargs:
+            warn("Need to rewrite covMat bit to allow ReTau=186 mats")
             covfName = 'covR590N64l%02dm%02d.npy'%(a,b//2)
             covMat = np.load(covDataDir+covfName)
             print("covMat was not supplied. Loaded matrix from %s ..."%(covDataDir+covfName))
@@ -471,6 +478,14 @@ class statComp(linearize):
         self.B, self.H, self.S = decomposeZ(self.Z,**kwargs)
         return
 
+
+
+
+
+#===========================================================================================
+#===========================================================================================
+#===========================================================================================
+# Non-class functions
 def decomposeZ(Z, **kwargs):
     """ Decompose Z = BH* + HB*
     Following Qdecomposition of Zare and Jovanovic
@@ -594,7 +609,52 @@ def loadStatComp(fName):
     return
 
         
-        
+def turbMeanChannel(N=191,Re=186.,**kwargs):
+    """
+    Turbulent mean velocity profile, and its first two derivatives.
+    Inputs:
+        N (=191):   Number of internal Chebyshev nodes 
+                        (coz my ReTau=186 simulation has 192 internal cells = 193 edges including the walls)
+        Re (=186):  Friction Reynolds number
+    Outputs:
+        Dictionary containing
+            U
+            dU
+            d2U:    Turbulent mean and its derivatives on Chebyshev grid with N nodes, normalized by friction velocity
+            z:  Internal chebyshev nodes
+    """
+    alfa = 25.4
+    kapa = 0.426
+    Re = 186.
+    nuT = lambda zt: -0.5 + 0.5*np.sqrt( 1.+
+                (kapa*Re/3.* (2.*zt - zt**2) * (3. - 4.*zt + 2.*zt**2) *
+                             (1. - np.exp( (np.abs(zt-1.)-1.)*Re/alfa )   )    )**2)
+
+    intFun = lambda xi: Re * (1.-xi)/(1. + nuT(xi)) 
+    zArr,DM = pseudo.chebdif(N+2,2)
+    zArr = zArr[1:-1]   # Keep only the internal nodes
+    D1 = DM[1:-1,1:-1,0]    # Same for diff mats - only internal nodes
+    D2 = DM[1:-1,1:-1,1]
+
+    # I use z \in {-1,1}, but the nuT based integral equation for U is designed to work for
+    #   z \in {0,2}. So....
+    zArr= 1.+zArr   # Doesn't matter if the mapping is 1-z or 1+z, coz U is symmetric about the centerline
+
+    U = np.zeros(zArr.size)
+
+    for ind in range(zArr.size):
+        U[ind] = quad( intFun, 0., zArr[ind])[0]
+
+    dU = D1 @ U
+    d2U = D2 @ U
+    outDict = {'U':U, 'dU':dU, 'd2U':d2U,'z':zArr-1.}
+
+    return outDict 
+
+
+
+
+
 
         
 
