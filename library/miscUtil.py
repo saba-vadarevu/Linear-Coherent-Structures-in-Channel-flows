@@ -4,6 +4,8 @@ import sys
 import os
 import matplotlib.pyplot as plt
 from scipy.integrate import quad
+from scipy.interpolate import interp1d
+import pseudo
 
 def phys2spec(t=100000, L=64,M=48,Nx=512,Ny=320,Nz=192,loadPath=None,savePath=None,prefixes=['u','v','w']):
     """ Read binary file for physical field and write binary file for spectral field
@@ -29,20 +31,20 @@ def phys2spec(t=100000, L=64,M=48,Nx=512,Ny=320,Nz=192,loadPath=None,savePath=No
     for pfix in prefixes:
         fName = loadPath+ pfix + '_it%s.dat'%t
         xRange = np.r_[0:L+1,Nx-L:Nx]
-        try:
-            with open(fName,'rb') as inFile:
-                uArr = np.fromfile(inFile, dtype=np.float, count=-1)
-            uArr = uArr.reshape((Nx,Ny,Nz))
-            uArrFFcomplex = np.fft.rfftn(uArr, axes=(0,1))/Nx/Ny
-            uArrFFcomplex = uArrFFcomplex[ xRange, :M+1 ]
-            uArrFFreal = np.concatenate( (np.real(uArrFFcomplex), np.imag(uArrFFcomplex)), axis=2)
-            newName = savePath+ pfix + 'FF_it%s.dat'%t
+        #try:
+        with open(fName,'rb') as inFile:
+            uArr = np.fromfile(inFile, dtype=np.float, count=-1)
+        uArr = uArr.reshape((Nx,Ny,Nz))
+        uArrFFcomplex = np.fft.rfftn(uArr, axes=(0,1))/Nx/Ny
+        uArrFFcomplex = uArrFFcomplex[ xRange, :M+1 ]
+        uArrFFreal = np.concatenate( (np.real(uArrFFcomplex), np.imag(uArrFFcomplex)), axis=2)
+        newName = savePath+ pfix + 'FF_it%s.dat'%t
 
-            with open(newName,'wb') as outFile:
-                uArrFFreal.tofile(outFile)
-            print("Successfully FFTd %s to %s" %(fName,newName))
-        except:
-            print("Could not FFT %s for whatever reason..")
+        with open(newName,'wb') as outFile:
+            uArrFFreal.tofile(outFile)
+        print("Successfully FFTd %s to %s" %(fName,newName))
+        #except:
+            #print("Could not FFT %s for whatever reason.."%fName)
         sys.stdout.flush()
     return
 
@@ -150,15 +152,48 @@ def nodesCellCenters(nCells=192,**kwargs):
     ztmp2 = np.cos(np.pi * (indArr+1)/nz)   # Bottom edge of internal cell, cos(n*pi/N) for n=1 to N
     # z-coords for cell centers: zCC
     zCC = np.zeros(nz + 2*nGhost)
-    zCC[nGhost:-nGhost] = (ztmp1 + ztmp2)/2.
+    zCC[nGhost:zCC.size-nGhost] = (ztmp1 + ztmp2)/2.
     # Size of ghost cells are symmetric about the walls on either end
-    zCC[nGhost-1::-1] = 1. + (1.-zCC[:nGhost])
-    zCC[:nz+nGhost-1:-1] = -1. - (1.+zCC[nz:nz+nGhost])  # Size of ghost cells at top wall
+    #zCC[nGhost-1::-1] = 1. + (1.-zCC[:nGhost])
+    #zCC[:nz+nGhost-1:-1] = -1. - (1.+zCC[nz:nz+nGhost])  # Size of ghost cells at top wall
     zCC = Lz/2.* zCC
 
     return zCC
 
+def interpDNS(ccArr,**kwargs):
+    """
+    Interpolate data from DNS on cell-centers to the Chebyshev nodes. Scipy's cubic splines are used.
+    WARNING: This function assumes that the array has a value zero at the boundary.
+    Inputs:
+        ccArr:  Data array on cell centers. Last dimension of ccArr denotes cell-center nodes
+        nCheb (optional): Number of internal chebyshev nodes to interpolate to.
+                Defaults to ccArr.shape[-1] - 1
+    Outputs:
+        chebArr:    Data array on Chebyshev nodes
+        """
+    origDim = ccArr.ndim
+    if origDim > 2:
+        warn("interpDNS only returns 1d or 2d arrays. If the input array has more dimensions, remember to reshape it afterwards.")
+    N = ccArr.shape[-1]; ccZ = nodesCellCenters(nCells=N)   # Number of cell-centers, and their locations in (1,-1)
+    ccArr = ccArr.reshape((ccArr.size//N,N))
 
+    walledArr = np.zeros((ccArr.shape[0], N+2)); walledZ= np.zeros(N+2)  # Extend nodes and values to include z=1,-1
+    walledArr[:,1:-1] = ccArr[:] 
+    walledZ[1:-1] = ccZ; walledZ[0] = 1.; walledZ[-1] = -1.    # Data is 0 at either walls
+
+    # Defining nodes to interpolate to, and an array to save this data
+    nCheb = kwargs.get('nCheb',N-1) 
+    chebZ = pseudo.chebdif(nCheb+2,1)[0]    # N cell centers means N+1 edges including walls
+    chebZ = chebZ[1:-1]         # Exclude the walls
+    chebArr = np.zeros((ccArr.shape[0], chebZ.size),dtype=ccArr.dtype)
+
+    for ind in range(ccArr.shape[0]):
+        intFun = interp1d(ccZ, ccArr[ind], kind='cubic')    # Cubic spline interpolation function for each scalar in ccArr
+        chebArr[ind] = intFun(chebZ)    # Interpolate to chebyshev nodes
+
+    if origDim == 1: chebArr = chebArr.flatten()
+
+    return  chebArr, chebZ
 
 
 
