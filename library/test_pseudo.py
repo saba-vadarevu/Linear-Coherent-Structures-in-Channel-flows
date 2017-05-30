@@ -9,6 +9,8 @@ class pseudoTestCase(unittest.TestCase):
     Test functions in pseudospectral methods module "pseudo.py"
     test_chebdifBL(): Using function  f(y) = y^3 exp(-y) + y^6 exp(-5y)
     """
+    print("Norms and dot products have not been tested yet.")
+    print();print()
     def test_chebdif(self,N=18):
         """ Testing the differentation matrices using a test function,
             f(y) = (1-y**2)**2 + 5(1-y**4)**3
@@ -16,10 +18,11 @@ class pseudoTestCase(unittest.TestCase):
                 This function is chosen to have clamped BCs on [1,-1]
                     so that I can later validate cheb4c with the same funciton
         """
+        print("chebdif... Verifying first 4 derivatives from chebdif using a 12th order polynomial for collocation......")
         N = np.int(N)
         y, DM = chebdif(N, 4)
-        y = y[1:-1]
-        DM = np.ascontiguousarray(DM[1:-1,1:-1])
+        #y = y[1:-1]
+        #DM = np.ascontiguousarray(DM[1:-1,1:-1])
         D1 = DM[:,:,0]
         D2 = DM[:,:,1]
         D3 = DM[:,:,2]
@@ -27,7 +30,7 @@ class pseudoTestCase(unittest.TestCase):
         
         # Clenshaw-Curtis quadrature for integral norm
         def norm(arr):
-            arr = np.concatenate(([0.],arr,[0.]))
+            #arr = np.concatenate(([0.],arr,[0.]))
             return chebnorm(arr,N)
         
         
@@ -55,6 +58,7 @@ class pseudoTestCase(unittest.TestCase):
                 This function is chosen to have clamped BCs on [1,-1]
                     so that I can later validate cheb4c with the same funciton
         """
+        print("cheb4c... Comparing clamped D4 from cheb4c with analytical derivative of 12th order polynomial.........")
         N = np.int(N)
         D4 = cheb4c(N)
         y,DM = chebdif(N,4)
@@ -62,7 +66,7 @@ class pseudoTestCase(unittest.TestCase):
         
         # Clenshaw-Curtis quadrature for integral norm
         def norm(arr):
-            arr = np.concatenate(([0.],arr,[0.]))
+            #arr = np.concatenate(([0.],arr,[0.]))
             return chebnorm(arr,N)
         
         f = ( 1. - y**2 )**2 + 5.* ( 1. - y**4 )**3
@@ -70,27 +74,27 @@ class pseudoTestCase(unittest.TestCase):
         
 
         fy4 = -336.  + 25200.* y**4 - 59400.* y**8
-        self.assertAlmostEqual( norm( fy4[1:-1] - np.dot(D4,f[1:-1]) ) , 0. )
-        self.assertAlmostEqual( norm( np.dot(D4_, f)[1:-1] - np.dot(D4,f[1:-1]) ) , 0. )
+        self.assertAlmostEqual( norm( fy4 - np.dot(D4,f) ) , 0. )
+        self.assertAlmostEqual( norm( np.dot(D4_, f) - np.dot(D4,f) ) , 0. )
 
         return
 
     def test_cheb(self,N=18):
         """ Testing if D matrices from chebdif are similar to those from cheb4c(returnAll=True) 
             when the appropriate test functions are used. """
-        print("cheb... Comparing Dk vs Dk_clamped for channel using an appropriate test function.")
+        print("BL... Comparing Dk vs Dk_clamped for channel using an appropriate test function.")
         N = np.int(N)
         y, DM = chebdif(N,4)
         DMcl = cheb4c(N,returnAll=True)
         
         def norm(arr):
-            arr = np.concatenate(([0.],arr,[0.]))
+            #arr = np.concatenate(([0.],arr,[0.]))
             return chebnorm(arr,N)
         # Clenshaw-Curtis quadrature for integral norm
         
         f = ( 1. - y**2 )**2 + 5.* ( 1. - y**4 )**3
-        f = f[1:-1]
-        DM = DM[1:-1,1:-1]
+        #f = f[1:-1]
+        #DM = DM[1:-1,1:-1]
         normdiff1 = norm( np.dot(DMcl[:,:,0],f)  - np.dot(DM[:,:,0],f) )
         normdiff2 = norm( np.dot(DMcl[:,:,1],f)  - np.dot(DM[:,:,1],f) )
         normdiff3 = norm( np.dot(DMcl[:,:,2],f)  - np.dot(DM[:,:,2],f) )
