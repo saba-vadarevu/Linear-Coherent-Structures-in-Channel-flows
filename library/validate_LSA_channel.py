@@ -5,11 +5,10 @@ import ops
 
 flowDict = {'a':0.5, 'b':1., 'Re':2000.}
 N = 81
-y = chebdif(N+2,1)[0]
-y = y[1:-1]
+y = chebdif(N,1)[0]
 U = 1.- y**2; dU = -2.*y; d2U=-2.*np.ones(U.size)
-#linOps = ops.linearize(N=N,flowClass="channel", U=U, dU=dU, d2U=d2U )
-linOps = ops.linearize(N=N,flowClass="channel")
+linOps = ops.linearize(N=N,flowClass="channel", U=U, dU=dU, d2U=d2U )
+#linOps = ops.linearize(N=N,flowClass="channel")
 
 evals, evecs = linOps.eig(linOps.OSS(**flowDict), weighted=True)
 #evals, evecs = linOps.eig(OSS, b=b, weighted=True)

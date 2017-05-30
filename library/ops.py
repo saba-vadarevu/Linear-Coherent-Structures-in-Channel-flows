@@ -65,17 +65,14 @@ class linearize(object):
             if flowClass not in ("channel" , "couette"):
                 print("flowClass is not set to 'channel', 'bl', or 'couette'. Defaulting to 'channel'.....")
                 flowClass = "channel"
-            y,DM = pseudo.chebdif(N+2,2)
+            y,DM = pseudo.chebdif(N,2)
             # For now, channel code is written to include nodes at the wall. 
-            y = y[1:-1]     # Ignore both walls
-            DM = DM[1:-1, 1:-1]
             D1 = DM[:,:,0]
             D2 = DM[:,:,1]
-            D4 = pseudo.cheb4c(N+2)       # Imposes clamped BCs
-            w = pseudo.clencurt(N+2)      # Weights matrix
-            w = w[1:-1]
+            D4 = pseudo.cheb4c(N)       # Imposes clamped BCs
+            w = pseudo.clencurt(N)      # Weights matrix
        
-        self.__version__ = '5.2.1'    # m.c, m is month and c is major commit in month
+        self.__version__ = '6.0.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -116,9 +113,7 @@ class linearize(object):
         self.flowClass = flowClass
 
         print("Initialized instance of 'linearize', version %s." %(self.__version__),
-                "New in this version: diffmats and OSS validated for channel and BL LSA. ",
-                "Re is now a class attribute. Use the appropriate one depending on what velocity is used for scaling U,dU,d2U.",
-                "To fix: channel routines in pseudo.py to ignore wall-nodes, ",
+                "New in this version: pseudo module is defined for internal nodes ",
                 "To fix: Eddy viscosity, resolvent, and svd are currently not supported.",sep="\n")
 
         return
@@ -631,10 +626,9 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
                              (1. - np.exp( (np.abs(zt-1.)-1.)*Re/alfa )   )    )**2)
 
     intFun = lambda xi: Re * (1.-xi)/(1. + nuT(xi)) 
-    zArr,DM = pseudo.chebdif(N+2,2)
-    zArr = zArr[1:-1]   # Keep only the internal nodes
-    D1 = DM[1:-1,1:-1,0]    # Same for diff mats - only internal nodes
-    D2 = DM[1:-1,1:-1,1]
+    zArr,DM = pseudo.chebdif(N,2)
+    D1 = DM[:,:,0]    # Same for diff mats - only internal nodes
+    D2 = DM[:,:,1]
 
     # I use z \in {-1,1}, but the nuT based integral equation for U is designed to work for
     #   z \in {0,2}. So....

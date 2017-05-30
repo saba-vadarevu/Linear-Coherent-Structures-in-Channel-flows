@@ -183,8 +183,7 @@ def interpDNS(ccArr,**kwargs):
 
     # Defining nodes to interpolate to, and an array to save this data
     nCheb = kwargs.get('nCheb',N-1) 
-    chebZ = pseudo.chebdif(nCheb+2,1)[0]    # N cell centers means N+1 edges including walls
-    chebZ = chebZ[1:-1]         # Exclude the walls
+    chebZ = pseudo.chebdif(nCheb,1)[0]    # N cell centers means N+1 edges including walls
     chebArr = np.zeros((ccArr.shape[0], chebZ.size),dtype=ccArr.dtype)
 
     for ind in range(ccArr.shape[0]):

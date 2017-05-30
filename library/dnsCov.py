@@ -65,7 +65,7 @@ np.save('uMeanN192.npy',U)
 covMat = covMat/len(uFiles)
 
 # Weighting the covariance matrices with clencurt quadrature
-weightsArr = pseudo.clencurt(nCheb+2)
+weightsArr = pseudo.clencurt(nCheb)
 q = np.sqrt(weightsArr); q = np.concatenate(( q,q,q ))  # Tile them thrice for u,v,w
 Q = np.diag(q)      # Build a diagonal matrix out of it
 for ind1 in range(covMat.shape[0]):
