@@ -3,6 +3,7 @@
 # Version 6.0.1
 #
 # IMPORTANT: In this version, all functions take as argument the number of internal nodes, denoted Nint
+#           clencurt() modified to include a factor of 0.5, to normalize the integral which is from -1 to 1
 # Contains functions:
 #   y,DM    = chebdif(Nint,M),     Differentiation matrices (Chebyshev collocation)
 #   w       = clencurt(Nint),      Clenshaw-Curtis weights
@@ -34,9 +35,9 @@
 
 
 # Sabarish Vadarevu
-# Aerodynamics and Flight Mechanics group
-# University of Southampton, United Kingdom
-# Email: SBV1G13@SOTON.AC.UK
+# Mechanical engineering  
+# University of Melbourne, Australia
+# Email: Sabarish.Vadarevu@unimelb.edu.au 
 ###--------------------------------------------------------
 
 import numpy as np
@@ -102,11 +103,11 @@ def chebdif(Nint,M):
 
 	
 def clencurt(Nint):
-    """ w = clencurt(Nint): Computes the Clenshaw Curtis weights on internal Chebyshev nodes
+    """ w = clencurt(Nint): Computes the Clenshaw Curtis weights on internal Chebyshev nodes, including a factor of 0.5
     Inputs:
         Nint:  Number of internal Chebyshev collocation nodes
     Outputs:
-        w:  1-d numpy array of weights
+        w:  1-d numpy array of weights, so that w*f = 0.5 * \int_{-1}^{1} f(y) dy
     To integrate a function, given as a 1-d array of values 'f' on 'N' internal Chebyshev nodes 'y', 
         f_int = np.dot(w,f)"""
     N = Nint + 2
@@ -124,7 +125,7 @@ def clencurt(Nint):
         F = np.real(ifft(V, n=None, axis=0))
         x = F[0:n1,1]
         w = np.hstack((F[0,0],2*F[1:n,0],F[n,0]))
-    return w[1:-1]
+    return 0.5 * w[1:-1]
 
 def _chebdotvec(arr1,arr2,Nint):
     # This function computes inner products of vectors ONLY.

@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+from scipy.linalg import sqrtm
 import pseudo 
 import glob
 from warnings import warn
@@ -292,7 +293,7 @@ class linearize(object):
    
 
 class statComp(linearize):
-    def __init__(self,a=0.25,b=2./3.,**kwargs):
+    def __init__(self,a=0.25,b=20./3.,Re=186.,**kwargs):
         """
         Initialize a case for covariance completion. 
         Inherits class 'linearize'. See this class for input arguments.
@@ -321,7 +322,6 @@ class statComp(linearize):
             dynamicsMat (weighted negative of the OSS matrix)
             outputMat   (weighted matrix for converting velocity vorticity to velocities)
         """
-        kwargs['Re'] = kwargs.get('Re',186.)    # If ReTau is not supplied, use 186 
         kwargs['N'] = kwargs.get('N', 48)
         if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') is 'channel'):
             outDict = turbMeanChannel(**kwargs)
@@ -330,11 +330,25 @@ class statComp(linearize):
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
         self.a = a
         self.b = b
+        self.Re = Re
         if 'covMat' not in kwargs:
-            warn("Need to rewrite covMat bit to allow ReTau=186 mats")
+            a0 = 0.25; b0 = 2./3.; N = self.N
             covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
-            covMat = np.load(covfName)
-            print("covMat was not supplied. Loaded matrix from %s ..."%(covfName))
+            print("covMat was not supplied. Loading matrix from %s ..."%(covfName))
+            covMatTemp = np.load(covfName)
+            print("covMat from DNS data has y as spanwise. Reordering to have y as wall-normal......")
+            covMat = covMatTemp.copy()
+            covMat[0*N:1*N, 1*N:2*N ] = covMatTemp[0*N:1*N, 2*N:3*N]    # Assign uw* from DNS to uv* in linear modelling 
+            covMat[0*N:1*N, 2*N:3*N ] = covMatTemp[0*N:1*N, 1*N:2*N]    # Assign uv* from DNS to uw* in linear modelling 
+
+            covMat[1*N:2*N, 0*N:1*N ] = covMatTemp[2*N:3*N, 0*N:1*N]    # Assign wu* from DNS to vu* in linear modelling 
+            covMat[1*N:2*N, 1*N:2*N ] = covMatTemp[2*N:3*N, 2*N:3*N]    # Assign ww* from DNS to vv* in linear modelling 
+            covMat[1*N:2*N, 2*N:3*N ] = covMatTemp[2*N:3*N, 1*N:2*N]    # Assign wv* from DNS to vw* in linear modelling 
+            
+            covMat[2*N:3*N, 0*N:1*N ] = covMatTemp[1*N:2*N, 0*N:1*N]    # Assign vu* from DNS to wu* in linear modelling 
+            covMat[2*N:3*N, 1*N:2*N ] = covMatTemp[1*N:2*N, 2*N:3*N]    # Assign vw* from DNS to wv* in linear modelling 
+            covMat[2*N:3*N, 2*N:3*N ] = covMatTemp[1*N:2*N, 1*N:2*N]    # Assign vv* from DNS to ww* in linear modelling 
+            print("Reordering complete... Remember to verify the ordering.")
         else:
             covMat = kwargs['covMat']
         assert covMat.shape == (3*self.N, 3*self.N)
@@ -356,18 +370,41 @@ class statComp(linearize):
 
         return
 
-    def dynamicsMat(self):
-        """ The dynamics matrix describing evolution of [w,eta]^T at (self.a, self.b).
-        It is the negative of the weighted OSS operator.
-        """
-        return -self._weightMat( self.OSS(a=self.a, b=self.b) )
+    def makeSystem(self):
+        """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v
+        Inputs:
+            None 
+        Outputs:
+            A_psi:  Dynamics matrix; d_t psi = A_psi  psi  + forcing
+            C_psi:  Output matrix;  W^1/2  v  =  C_psi  psi"""
+           
 
-    def outputMat(self):
-        """ The output matrix to get [Qu,Qv,Qw] from [Qw,Q eta] at (self.a, self.b).:w
-        Q is the weight matrix so that ||(Qu)* Qu||_2 gives the energy of u.
+        """ psi = Q^{1/2} phi, with Q = Q^{1/2}* Q^{1/2} and phi = [v, eta]^T  at (self.a, self.b).
+            Q is defined such that the standard Euclidean norm < psi, psi > produces the energy norm,
+                < W^1/2 v, W^1/2 v> = 1/2 \int_{-1}^{1}  ||u||^2 + ||v||^2 + ||w||^2  dy
+            Comparing factors, we get Q = C* W C
+            If A_phi describes the dynamics of phi, so that d_t phi = A_bar phi + forcing, 
+            and A_psi describes the dynamics of psi, so that d_t psi = A psi + forcing, 
+            then A_psi, the dynamics matrix, relates to A_phi (which is the OSS matrix) as
+            A_psi = Q^{1/2} A_phi Q^{-1/2}
         """
-        unWeightedOutMat = self.velVor2primitivesMat(a=self.a, b=self.b)
-        return self._weightMat(unWeightedOutMat)
+        A_phi = linearize.dynamicsMat(self, a=self.a, b=self.b)  # OSS matrix describing the evolution of phi = [v, eta]^T
+        C_phi = linearize.velVor2primitivesMat(self, a=self.a, b=self.b)    # v = C_phi * phi
+        W = np.diag( np.concatenate(( self.w, self.w, self.w )) )    # The weight matrix for integrating over chebyshev nodes
+        Wsqrt = np.diag( np.sqrt( np.concatenate(( self.w, self.w, self.w )) ) )           
+        
+        Q = C_phi.conj().T  @ W @ C_phi
+        Qsqrt = sqrtm(Q)     # Routine from scipy for square root of matrices
+        QsqrtInv = np.linalg.solve( Qsqrt, np.identity(Qsqrt.shape[0]) )
+        
+        A_psi = Qsqrt @ A_phi @ QsqrtInv
+        """ Matrix C_psi such that  W^1/2 v = C_psi psi
+        The W^1/2 factor for v is there because we want the Euclidean norm of W^1/2 v to be the energy norm.
+        From the definition of C_psi, and from psi = Q^1/2 phi (see above), v = C_phi phi, 
+           C_psi = W^1/2  C_phi  Q^{-1/2} 
+        """
+        C_psi = Wsqrt @ C_phi @ QsqrtInv
+        return A_psi, C_psi
 
 
     def completeStats(self,savePrefix='outStats',**kwargs):
@@ -387,8 +424,9 @@ class statComp(linearize):
         kwargs['rankPar'] = kwargs.get('rankPar',200.)
         print("Parameters of the statComp instance are:")
         print("a:%.2g, b:%.2g, Re:%d, N:%d, rankPar:%.1g"%(self.a, self.b, self.Re, self.N, kwargs['rankPar']))
-        statsOut = minimize.minimize( self.dynamicsMat(),
-                outMat = self.outputMat(), structMat = self.structMat,
+        A , C = self.makeSystem()
+        statsOut = minimize.minimize( A,
+                outMat = C, structMat = self.structMat,
                 covMat = self.covMat, **kwargs)
         if savePrefix is not None:
             fName = kwargs.get('savePath','') + savePrefix
