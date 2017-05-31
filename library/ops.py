@@ -233,19 +233,17 @@ class linearize(object):
 
     def dynamicsMat(self,**kwargs):
         """ The dynamics matrix relating velocity-vorticity to their time-derivatives:
-            [w_t, eta_t] = A [w,eta].
+            [v_t, eta_t] = A [v,eta].
             This dynamics matrix A is the same as the OSS matrix
         """
         return self.OSS(**kwargs)
 
     def velVor2primitivesMat(self,**kwargs):
-        """ Defines a matrix convertMat: [u,v,w]^T = convertMat @ [w,eta]^T.
-        v is spanwise, w is wall-normal. 
+        """ Defines a matrix convertMat: [u,v,w]^T = convertMat @ [v,eta]^T.
         Input: 
             dict with wavenumbers (a,b) = (1,0) 
         Output:
             3N x 2N matrix convertMat """
-        warn("z,w represent wall-normal, and y,v represent spanwise.")
 
         a = kwargs.get('a', 2./3. )
         b = kwargs.get('b', 20./3.)
@@ -261,6 +259,27 @@ class linearize(object):
         convertMat = convertMat/(a**2 + b**2)
 
         return convertMat
+
+    def primitives2velVorMat(self, **kwargs):
+        """ Defines a matrix convertMat: [v,eta]^T = convertMat @ [u,v,w]^T.
+        Input: 
+            dict with wavenumbers (a,b) = (2./3.,20./3.) 
+        Output:
+            3N x 2N matrix convertMat """
+
+        a = kwargs.get('a', 2./3. )
+        b = kwargs.get('b', 20./3.)
+        
+        Z = np.zeros((self.N, self.N), dtype=np.complex)
+        I = np.identity(self.N, dtype=np.complex)
+
+        convertMat = np.vstack((
+            np.hstack(( Z      , I,   Z      )),
+            np.hstack(( 1.j*b*I, Z, -1.j*a*I )) ))
+
+
+        return convertMat
+
         
 
     def resolvent(self,**kwargs):
@@ -335,7 +354,8 @@ class statComp(linearize):
             a0 = 0.25; b0 = 2./3.; N = self.N
             covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
             print("covMat was not supplied. Loading matrix from %s ..."%(covfName))
-            covMatTemp = np.load(covfName)
+            covMatTemp = 0.5 * np.load(covfName)    
+            # The 0.5 factor is needed because the weight matrix used when computing covarainces did not include this 0.5 
             print("covMat from DNS data has y as spanwise. Reordering to have y as wall-normal......")
             covMat = covMatTemp.copy()
             covMat[0*N:1*N, 1*N:2*N ] = covMatTemp[0*N:1*N, 2*N:3*N]    # Assign uw* from DNS to uv* in linear modelling 
@@ -349,6 +369,7 @@ class statComp(linearize):
             covMat[2*N:3*N, 1*N:2*N ] = covMatTemp[1*N:2*N, 2*N:3*N]    # Assign vw* from DNS to wv* in linear modelling 
             covMat[2*N:3*N, 2*N:3*N ] = covMatTemp[1*N:2*N, 1*N:2*N]    # Assign vv* from DNS to ww* in linear modelling 
             print("Reordering complete... Remember to verify the ordering.")
+            print("Remember that the covariance matrix is defined on clencurt-weighted velocity fields.")
         else:
             covMat = kwargs['covMat']
         assert covMat.shape == (3*self.N, 3*self.N)
