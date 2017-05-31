@@ -1,6 +1,7 @@
 import numpy as np
 import scipy as sp
 import pseudo 
+import glob
 from warnings import warn
 import blasius
 import sys
@@ -17,6 +18,7 @@ Problem definition must be supplied with keyword arguments
 
 IMPORTANT: Everything here is written only for internal nodes. 
             Variables at the wall are always ignored. 
+            y,v represent wall-normal
 """
 covDataDir = os.environ['DATA']+ 'cov/'
 class linearize(object):
@@ -176,60 +178,11 @@ class linearize(object):
 
         return mat
 
-    def OS(self, **kwargs):
-        """ Define the Orr-Sommerfeld operator matrix (without the Squire equations). 
-        Inputs:
-            kwargs: Dictionary containing wavenumbers
-                        Defaults are (a,b) = (1., 0.)
-        Outputs:
-            OS matrix
-        What this OS matrix is is given in function comments.
-        Essentially, I define OS*[vel].T =: i.omega*[vel].T
-            """
-        # For consistency, I use 2d numpy arrays instead of numpy matrices
-        # Where dot products are needed, use np.dot(A,B) instead of A*B
-        warn("This function only returns the matrix for Orr-Sommerfeld operator. For Squire, use self.OSS()")
-
-
-        a = kwargs.get('a', 1.)
-        b = kwargs.get('b', 0.)
-        Re= self.Re 
-        k2 = a**2 + b**2
-
-        # We build the matrix only for internal nodes, so use N-2
-        I = np.identity(self.N )
-        Z = np.identity(self.N )
-
-        # All attributes of self ignore walls (in variables and differentiation matrices)
-        D1_ = self.D1
-        D2_ = self.D2
-        D4_ = self.D4    
-        U_ = np.diag(self.U)
-        dU_ = np.diag(self.dU)
-        d2U_ = np.diag(self.d2U)
-        # U and d2U have to be diagonal matrices to multiply other matrices
-     
-        # The linearized equation looks like this (from Schmid & Henningson, 2001)
-        # -i.omega [k^2 - D2,   Z]  [vel]  +  [LOS   ,  Z  ] [vel]  = [0]
-        #          [Z,          I]  [vor]     [i.b.dU,  LSQ] [vor]  = [0]
-
-        # where LOS = i.a.U.(k^2-D2) + i.a.d2U + 1/Re . (k^2 - D^2)^2
-        #       LSQ = i.a.U  + 1/Re . (k^2 - D^2)
-        LOS  = 1.j*a*np.dot(U_ , (k2*I - D2_ )) \
-                + 1.j*a* d2U_  + 0.*2.j*a*dU_* D1_ \
-                + (1./Re) * (k2*k2*I - 2.*k2*D2_ + D4_ )
-
-
-        LHSmat =k2*I-D2_
-        
-        return np.dot(  np.linalg.inv(LHSmat), LOS)
-
-
     def OSS(self, **kwargs):
         """ Define the Orr-Sommerfeld Squire operator matrix. 
         Inputs:
             kwargs: Dictionary containing wavenumbers 
-                        Defaults are (a,b) = (1., 0.)
+                        Defaults are (a,b) = (2.5, 20./3.)
         Outputs:
             OSS matrix
         What this OSS matrix is is given in function comments.
@@ -239,8 +192,8 @@ class linearize(object):
         # Where dot products are needed, use np.dot(A,B) instead of A*B
 
 
-        a = kwargs.get('a', 1.)
-        b = kwargs.get('b', 0.)
+        a = kwargs.get('a', 2.5)
+        b = kwargs.get('b', 20./3.)
         Re= self.Re
         k2 = a**2 + b**2
 
@@ -258,34 +211,31 @@ class linearize(object):
         # U and d2U have to be diagonal matrices to multiply other matrices
      
         # The linearized equation looks like this (from Schmid & Henningson, 2001)
-        # -i.omega  [vel]  +  [DeltaInv* LOS ,  Z  ] [vel]  = [0]
-        #           [vor]     [i.b.dU        ,  LSQ] [vor]  = [0]
+        # -i.omega  [vel]  =  [DeltaInv* LOS ,  Z  ] [vel]  
+        #           [vor]  =  [-i.b.dU       ,  LSQ] [vor]  
 
-        # where LOS =  i.a.U.(k^2-D2) + i.a.d2U + 1/Re . (k^2 - D^2)^2
-        #               I think a "+ 2.i.a.dU" is missing in the above expression, but no one uses it, so maybe it's bad arithmetic on my part.
-        #       LSQ = i.a.U  + 1/Re . (k^2 - D^2)
+        # where LOS =   1/Re . (D2-k^2 I)^2 + i.a.d2U - i.a.U.(D2-k^2 I)
+        #       LSQ =   1/Re . (D2-k^2 I) - i.a.U   
 
-        LOS  = 1.j*a*np.dot(U_ , (k2*I - D2_ ))  + 1.j*a* d2U_ + (1./Re) * (k2*k2*I - 2.*k2*D2_ + D4_ )
-        DeltaMat = k2*I-D2_         # It's actually the negative of the Laplacian
-        LOS = np.linalg.solve(DeltaMat, I) @  LOS
+        LOS  = (1./Re) * (k2*k2*I - 2.*k2*D2_ + D4_ ) + 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   
+        DeltaMat = D2_ - k2*I        
+        DeltaInv = np.linalg.solve(DeltaMat, I) 
 
-        LSQ  = 1.j*a*U_  + (1./Re)* (k2*I - D2_ )
-        #LSQ = -LSQ
+        LSQ  = (1./Re)* (D2_ -k2*I ) - 1.j*a*U_   
 
-        OSS =  np.vstack( ( np.hstack( (LOS       , Z   ) ),\
-                            np.hstack( (1.j*b*dU_,  LSQ) ) )  )
-
+        OSS =  np.vstack(( np.hstack( (DeltaInv @ LOS, Z   ) ),\
+                           np.hstack( (-1.j*b*dU_    ,  LSQ) ) ))
 
         return OSS
+
+
 
     def dynamicsMat(self,**kwargs):
         """ The dynamics matrix relating velocity-vorticity to their time-derivatives:
             [w_t, eta_t] = A [w,eta].
-            This dynamics matrix A is the negative of the OSS matrix, because OSS is defined as
-                -i*omega* [w , eta]^T + OSS * [w,eta]^T = 0
-
+            This dynamics matrix A is the same as the OSS matrix
         """
-        return -self.OSS(**kwargs)
+        return self.OSS(**kwargs)
 
     def velVor2primitivesMat(self,**kwargs):
         """ Defines a matrix convertMat: [u,v,w]^T = convertMat @ [w,eta]^T.
@@ -296,16 +246,16 @@ class linearize(object):
             3N x 2N matrix convertMat """
         warn("z,w represent wall-normal, and y,v represent spanwise.")
 
-        a = kwargs.get('a', 1.)
-        b = kwargs.get('b', 0.)
+        a = kwargs.get('a', 2./3. )
+        b = kwargs.get('b', 20./3.)
         
         Z = np.zeros((self.N, self.N), dtype=np.complex)
         I = np.identity(self.N, dtype=np.complex)
 
         convertMat = np.vstack((
             np.hstack(( 1.j*a*self.D, -1.j*b*I )),
-            np.hstack(( 1.j*b*self.D,  1.j*a*I )),
-            np.hstack(( (a**2+b**2)*I,    Z    ))  ))
+            np.hstack(( (a**2+b**2)*I,    Z    )),
+            np.hstack(( 1.j*b*self.D,  1.j*a*I )) ))
 
         convertMat = convertMat/(a**2 + b**2)
 
@@ -382,9 +332,9 @@ class statComp(linearize):
         self.b = b
         if 'covMat' not in kwargs:
             warn("Need to rewrite covMat bit to allow ReTau=186 mats")
-            covfName = 'covR590N64l%02dm%02d.npy'%(a,b//2)
-            covMat = np.load(covDataDir+covfName)
-            print("covMat was not supplied. Loaded matrix from %s ..."%(covDataDir+covfName))
+            covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
+            covMat = np.load(covfName)
+            print("covMat was not supplied. Loaded matrix from %s ..."%(covfName))
         else:
             covMat = kwargs['covMat']
         assert covMat.shape == (3*self.N, 3*self.N)
@@ -618,9 +568,13 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
             d2U:    Turbulent mean and its derivatives on Chebyshev grid with N nodes, normalized by friction velocity
             z:  Internal chebyshev nodes
     """
-    alfa = 25.4
-    kapa = 0.426
-    Re = 186.
+    if Re == 186.:
+        alfa = 46.5
+        kapa = 0.61
+    else:
+        alfa = 25.4
+        kapa = 0.426
+
     nuT = lambda zt: -0.5 + 0.5*np.sqrt( 1.+
                 (kapa*Re/3.* (2.*zt - zt**2) * (3. - 4.*zt + 2.*zt**2) *
                              (1. - np.exp( (np.abs(zt-1.)-1.)*Re/alfa )   )    )**2)

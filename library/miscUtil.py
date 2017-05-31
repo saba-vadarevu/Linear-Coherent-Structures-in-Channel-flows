@@ -158,7 +158,9 @@ def nodesCellCenters(nCells=192,**kwargs):
     #zCC[:nz+nGhost-1:-1] = -1. - (1.+zCC[nz:nz+nGhost])  # Size of ghost cells at top wall
     zCC = Lz/2.* zCC
 
-    return zCC
+    # Return inverted list so that it goes from -1 to 1 instead of 1 to -1,
+    #   because the DNS data is saved from 0 to 2 (i.e., increasing y)
+    return zCC[::-1]
 
 def interpDNS(ccArr,**kwargs):
     """
@@ -177,7 +179,7 @@ def interpDNS(ccArr,**kwargs):
     N = ccArr.shape[-1]; ccZ = nodesCellCenters(nCells=N)   # Number of cell-centers, and their locations in (1,-1)
     ccArr = ccArr.reshape((ccArr.size//N,N))
 
-    walledArr = np.zeros((ccArr.shape[0], N+2)); walledZ= np.zeros(N+2)  # Extend nodes and values to include z=1,-1
+    walledArr = np.zeros((ccArr.shape[0], N+2),dtype=ccArr.dtype); walledZ= np.zeros(N+2)  # Extend nodes and values to include z=1,-1
     walledArr[:,1:-1] = ccArr[:] 
     walledZ[1:-1] = ccZ; walledZ[0] = 1.; walledZ[-1] = -1.    # Data is 0 at either walls
 

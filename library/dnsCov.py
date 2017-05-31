@@ -38,7 +38,7 @@ a0 = 2.*np.pi/Lx; b0 = 2.*np.pi/Ly
 nCheb = 62
 covMat = np.zeros( (lpArr.size, mpArr.size, 3*nCheb, 3*nCheb), dtype=np.complex)
 
-tRange = np.arange(100000, 150000,50)
+tRange = np.arange(100000, 150000,500)
 uFiles = ['uFF_it%s.dat'%t for t in tRange]
 vFiles = ['vFF_it%s.dat'%t for t in tRange]
 wFiles = ['wFF_it%s.dat'%t for t in tRange]
