@@ -30,6 +30,13 @@ import sys
 import pdb
 import h5py
 
+def minimizeFromFile(fName,**optDict):
+    """ Continue iterations of minimization from an earlier data dump"""
+    
+    return outDict 
+
+
+
 def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,**optDict):
     """
         Minimizes   -log(|X|) + rankPar  || Z|| 
@@ -47,6 +54,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     assert covMat.ndim == 2
 
     norm = np.linalg.norm   # Makes life easier later
+    minResPrimal = 1.0e05
 
     # Converting all input arrays into matrices
     # IMPORTANT: * NOW REPRESENTS MATRIX MULTIPLICATION AND NOT ELEMENTWISE MULTIPLICATION
@@ -140,7 +148,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     #print("Before starting iterations, evalsLadjY, logDetLadjY, dualY, trace(covMat*Y2) are",evalsLadjY, logDetLadjY, dualY, np.trace(covMat*Y2))
 
     Istate = np.identity(nState, dtype=dynMat.dtype)    # Identity
-    beta = 0.5      # Backtracking parameter
+    beta = 0.7      # Backtracking parameter
     stepSize1 = stepSize0   # Initial step size
     failIters = []  # Log failed iteration numbers
 
@@ -153,7 +161,23 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
     dualGapArr = np.zeros(iterMax)
     # Will include time later
 
+    ##=======================================================================================
+    # Function to dump data
+    def dumpToFile(dumpFileName, dumpX, dumpOptDict):
+        if not (dumpFileName.endswith('.h5') or dumpFileName.endswith('.hdf5')):
+            dumpFileName = dumpFileName + '.hdf5'
 
+        with h5py.File(dumpFileName,"w") as outFile:
+            dumpData = outFile.create_dataset("X", data=dumpX, compression='gzip')
+            for key in dumpOptDict.keys():
+                if isinstance(dumpOptDict[key], np.ndarray):
+                    outFile.create_dataset(key, data=dumpOptDict[key], compression='gzip')
+                else:
+                    dumpData.attrs[key] = dumpOptDict[key]
+
+
+
+    ##=======================================================================================
 
     for AMAstep in range(iterMax):
         dynMat = np.asmatrix(dynMat); outMat = np.asmatrix(outMat)
@@ -191,6 +215,10 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
             #print("evalsX, logDetX, |gradD1|, |gradD2| are",eigX, logDetX, det(gradD1), det(gradD2))
         for innerIter in range(100):
             a = rankPar/stepSize
+            aTol = 1.0e-01
+            if False:
+                if a > aTol: a = aTol
+
             assert isinstance(dynMat,np.matrix) and (Xnew, np.matrix) and (Y1,np.matrix)
             # Minimization step for Z^{k+1} 
             Wnew = -( dynMat * Xnew + Xnew * dynMat.H  +  (1./stepSize) * Y1 )
@@ -248,6 +276,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
             #print("logdetLadjYnew, dualYnew:", logDetLadjYnew, dualYnew)
             if np.amin( evalsLadjYnew ) < 0.:
                 stepSize = stepSize * beta    # Backtrack the step
+                print("Reducing step size coz evals<0.....")
             elif ( dualYnew < dualY + \
                             np.trace( gradD1 *(Y1new - Y1)) + \
                             np.trace( gradD2 *(Y2new - Y2)) - \
@@ -255,7 +284,9 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
                             (0.5/stepSize) * norm(Y2new - Y2, ord='fro')**2 ):
                 # Note: Frobenius norm essentially flattens the array and calculates a vector 2-norm
                 stepSize = stepSize * beta
+                print("Reducing step size coz dualYnew < .....")
             else:
+                print("Not reducing the step size...")
                 break
                 # So this is where we're breaking out of the inner loop
                 # I suppose what's happening here is we're checking if the primal residual is acceptable
@@ -273,9 +304,11 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
 
         # Print progress for every 100 outer iterations
         #if AMAstep%100 == 0:
-        if AMAstep%printIter == 0:
-            print("%8.2g  %8.3g  %10.2g  %10.2g  %10.2g  %7.2g  %d" %(stepSize1, \
-                    stepSize, tolPrimal, resPrimal, tolDual, np.abs(dualGap), AMAstep) )
+        if resPrimal < 0.9*minResPrimal:
+            minResPrimal = resPrimal
+        #if AMAstep%printIter == 0:
+            print("%7.2g  %8.3g  %6.2g  %10.4g  %6.2g  %7.2g  %6.4g  %d" %(stepSize1, \
+                    stepSize, tolPrimal, resPrimal, tolDual, (dualGap), np.sum(svalsNew), AMAstep) )
             sys.stdout.flush()
         #pdb.set_trace()
 

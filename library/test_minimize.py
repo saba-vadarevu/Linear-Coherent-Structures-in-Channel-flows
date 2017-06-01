@@ -12,7 +12,7 @@ import pdb
 import ops
 
 # Optimization problem for covariance completion, using a spring-mass-damper system
-N = 50  # Number of masses
+N = 20  # Number of masses
 print("Testing the CC_AMA algorithm for %d masses in a mass-sprint-damper system"%N)
 
 Ioutput = np.identity(N)    # We'll say the outputs are just the positions of the masses

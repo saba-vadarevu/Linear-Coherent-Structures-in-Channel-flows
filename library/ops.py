@@ -197,6 +197,7 @@ class linearize(object):
         b = kwargs.get('b', 20./3.)
         Re= self.Re
         k2 = a**2 + b**2
+        print("a, b, Re:",a,b,Re)
 
         # We build the matrix only for internal nodes, so use N-2
         I = np.identity(self.N )
@@ -260,7 +261,7 @@ class linearize(object):
 
         return convertMat
 
-    def primitives2velVorMat(self, **kwargs):
+    def primitives2velVorMat(self, custom=False, **kwargs):
         """ Defines a matrix convertMat: [v,eta]^T = convertMat @ [u,v,w]^T.
         Input: 
             dict with wavenumbers (a,b) = (2./3.,20./3.) 
@@ -272,13 +273,25 @@ class linearize(object):
         
         Z = np.zeros((self.N, self.N), dtype=np.complex)
         I = np.identity(self.N, dtype=np.complex)
+        
+        if custom:
+            # This is a simpler conversion matrix that I built
+            convertMat = np.vstack((
+                np.hstack(( Z      , I,   Z      )),
+                np.hstack(( 1.j*b*I, Z, -1.j*a*I )) ))
+        else:
+            # This is the one from Jovanovic and Bamieh (2005)
+            Delta = self.D2 - (a**2 + b**2) * I
+            DeltaInv = np.linalg.solve(Delta, I)
+            coeffMat = np.vstack(( 
+                        np.hstack(( DeltaInv, Z )),
+                        np.hstack(( Z,        I ))  ))
 
-        convertMat = np.vstack((
-            np.hstack(( Z      , I,   Z      )),
-            np.hstack(( 1.j*b*I, Z, -1.j*a*I )) ))
+            convertMat = np.vstack((
+                np.hstack(( -1.j*a*self.D1, -(a**2+b**2)*I, -1.j*b*self.D1 )),
+                np.hstack(( 1.j*b*I       , Z             , -1.j*a*I       )) ))
 
-
-        return convertMat
+        return coeffMat @ convertMat
 
         
 
@@ -343,6 +356,7 @@ class statComp(linearize):
         """
         kwargs['N'] = kwargs.get('N', 48)
         if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') is 'channel'):
+            # If U and its derivatives are not supplied, use curve-fit from ops.turbMeanChannel()
             outDict = turbMeanChannel(**kwargs)
             kwargs.update(outDict)
 
@@ -425,7 +439,60 @@ class statComp(linearize):
            C_psi = W^1/2  C_phi  Q^{-1/2} 
         """
         C_psi = Wsqrt @ C_phi @ QsqrtInv
-        return A_psi, C_psi
+
+
+        """ Matrix B_psi such that psi = B_psi  W1/2 v, 
+        an inverse of C_psi in a sense.
+        From psi = Q1/2 phi, phi = B_phi v, we can write
+            psi = B_psi W1/2 v = (Q1/2 B_phi W-1/2) W1/2 v, 
+            where B_phi comes from primitives2velVorMat()"""
+        B_phi = linearize.primitives2velVorMat(self, a=self.a, b=self.b)
+        wInv = 1./self.w
+        WsqrtInv = np.diag( np.sqrt( np.concatenate(( wInv, wInv, wInv )) ))
+        B_psi = Qsqrt @ B_phi @ WsqrtInv
+
+        return A_psi, C_psi, B_psi
+
+    def makeAdjSystem(self):
+        """ Build adjoint system.
+        Inputs:
+            None
+        Outputs: [Aadj, Cadj, Badj]
+            Aadj: Adjoint of dynamics matrix
+            Cadj: Adjoint of output matrix (C): W1/2 v = C psi
+            Badj: Adjoint of inverse of output matrix (B): psi = B W1/2 v
+
+            Here, W1/2 v is the clencurt-weighted velocity vector
+                psi is the state, a weighted [v, eta]^T vector such that
+                < psi, psi>_Euclidean = 0.5 \int_{-1}^1 ||u||^2 + ||v||^2 + ||w||^2 dy 
+        """
+        N = self.N; a = self.a; b = self.b; Re = self.Re
+        k2 = a**2 + b**2
+        I = np.identity(N); Z = np.zeros((N,N), dtype=np.complex)
+
+        Umat = np.diag(self.U)
+        dUmat = np.diag(self.dU)
+        d2Umat = np.diag(self.d2U)
+
+
+        A, C, B = self.makeSystem()
+        Badj = C.copy()
+        Cadj = B.copy()
+
+        # Building Aadj:
+        Aadj = np.zeros((2*N, 2*N), dtype=np.complex)
+        Delta = self.D2 - k2 * I
+        DeltaInv = np.linalg.solve(Delta, I)
+        Aadj11 = 1.j*a*Umat - 1.j*a*DeltaInv @ d2Umat + \
+                        1./Re*DeltaInv @ (Delta @ Delta)
+        Aadj22 = 1.j*a*Umat + 1./Re*Delta
+        Aadj21 = -1.j*b*DeltaInv @ dUmat
+
+        Aadj = np.vstack(( 
+                    np.hstack(( Aadj11, Aadj21 )),
+                    np.hstack((  Z    , Aadj22 ))   ))
+
+        return Aadj, Cadj, Badj
 
 
     def completeStats(self,savePrefix='outStats',**kwargs):
@@ -451,7 +518,8 @@ class statComp(linearize):
                 covMat = self.covMat, **kwargs)
         if savePrefix is not None:
             fName = kwargs.get('savePath','') + savePrefix
-            fName = fName + 'R%dN%da%02db%02d.hdf5'%(self.Re, self.N, self.a, self.b)
+            a0 = 0.25; b0 = 2./3.
+            fName = fName + 'R%dN%da%02db%02d.hdf5'%(self.Re, self.N, self.a//a0, self.b//b0)
             try:
                 with h5py.File(fName,"w") as outFile:
                     outStats = outFile.create_dataset("outStats",data=statsOut['X'],compression='gzip')
