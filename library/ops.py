@@ -141,15 +141,11 @@ class linearize(object):
         Call as self._weightMat(mat)"""
         w = self.w
         assert w.ndim == 1
-        Q  = np.diag(np.sqrt(self.w))
-        Qi = np.diag(1./np.sqrt(self.w))
-        N = self.N
+        q = np.sqrt(w); q = np.tile(q, mat.shape[0]//q.size)
+        Q  = np.diag(q)
+        Qi = np.diag(1./q)
 
-        for n1 in range( mat.shape[0]//N):
-            for n2 in range(mat.shape[1]//N):
-                mat[ n1*N: (n1+1)*N, n2*N: (n2+1)*N] = np.dot( Q, np.dot(mat[ n1*N: (n1+1)*N, n2*N: (n2+1)*N], Qi))
-
-        return mat
+        return Q @ mat @ Qi
 
     def _deweightVec(self,vec):
         """Pre-multiply vectors with the inverse of square-root of weights, 
@@ -357,7 +353,7 @@ class statComp(linearize):
         kwargs['N'] = kwargs.get('N', 48)
         if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') is 'channel'):
             # If U and its derivatives are not supplied, use curve-fit from ops.turbMeanChannel()
-            outDict = turbMeanChannel(**kwargs)
+            outDict = turbMeanChannel(Re=Re,**kwargs)
             kwargs.update(outDict)
 
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
@@ -701,6 +697,10 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
     else:
         alfa = 25.4
         kapa = 0.426
+    # However, if alfa and kapa are supplied as keyword arguments, use them instead
+    alfa = kwargs.get('alfa', alfa)
+    kapa = kwargs.get('kapa', kapa)
+    print("Using parameters Re=%.4g, alfa=%.4g, kapa=%.4g, N=%d"%(Re,alfa,kapa,N))
 
     nuT = lambda zt: -0.5 + 0.5*np.sqrt( 1.+
                 (kapa*Re/3.* (2.*zt - zt**2) * (3. - 4.*zt + 2.*zt**2) *
@@ -722,7 +722,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
 
     dU = D1 @ U
     d2U = D2 @ U
-    outDict = {'U':U, 'dU':dU, 'd2U':d2U,'z':zArr-1.}
+    outDict = {'U':U, 'dU':dU, 'd2U':d2U,'y':zArr-1.}
 
     return outDict 
 
