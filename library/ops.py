@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+from scipy.io import savemat
 from scipy.linalg import sqrtm
 import pseudo 
 import glob
@@ -556,17 +557,26 @@ class statComp(linearize):
 
         return statsOut
 
-    def saveSystem(self, fName='minSys.hdf5',prefix='../'):
+    def saveSystem(self, fName='minSys.mat',prefix='../'):
         fName = prefix + fName
         A,C,B = self.makeSystem()
-        if not (fName.endswith('.hdf5')  or fName.endswith('.h5')):
-            fName = fName + '.hdf5'
-        with h5py.File(fName,"w") as outFile:
-            outFile.create_dataset('A', data=np.asmatrix(A))
-            outFile.create_dataset('C', data=np.asmatrix(C))
-            outFile.create_dataset('E', data=np.asmatrix(self.structMat))
-            outFile.create_dataset('G', data=np.asmatrix(self.covMat))
-        print("Successfully saved system matrices A (dynMat), C (outMat), E (structMat), and G (covMat) to file ", fName)
+        if False:
+            if not (fName.endswith('.hdf5')  or fName.endswith('.h5')):
+                fName = fName.split('.')[0]
+                fName = fName + '.hdf5'
+            with h5py.File(fName,"w") as outFile:
+                outFile.create_dataset('A', data=np.asmatrix(A))
+                outFile.create_dataset('C', data=np.asmatrix(C))
+                outFile.create_dataset('E', data=np.asmatrix(self.structMat))
+                outFile.create_dataset('G', data=np.asmatrix(self.covMat))
+            print("Successfully saved system matrices A (dynMat), C (outMat), E (structMat), and G (covMat) to file ", fName)
+        else:
+            if not (fName.endswith('.mat')):
+                fName = fName.split('.')[0]
+                fName = fName + '.mat'
+            savemat(fName, {'A':A, 'C':C, 'E':self.structMat, 'G':self.covMat})
+            print("Successfully saved system matrices A (dynMat), C (outMat), E (structMat), and G (covMat) to file ", fName)
+
         return
 
 
