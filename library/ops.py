@@ -75,7 +75,7 @@ class linearize(object):
             D4 = pseudo.cheb4c(N)       # Imposes clamped BCs
             w = pseudo.clencurt(N)      # Weights matrix
        
-        self.__version__ = '6.0.1'    # m.c, m is month and c is major commit in month
+        self.__version__ = '6.2.3'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -187,11 +187,16 @@ class linearize(object):
             """
         # For consistency, I use 2d numpy arrays instead of numpy matrices
         # Where dot products are needed, use np.dot(A,B) instead of A*B
+        warn("To use eddy viscosity, pass kwarg 'nu'=self.nu to either makeSystem/makeAdjSystem, dynamicsMat, or OSS")
 
 
         a = kwargs.get('a', 2.5)
         b = kwargs.get('b', 20./3.)
         Re= self.Re
+        nu= kwargs.get('nu', np.ones(self.N))   
+        # If total viscosity is not supplied as a keyword argument, use molecular viscosity
+        # Include this term in the formulation as nu/Re, where nu is the ratio of total viscosity to molecular viscosity.
+        # When eddy viscosity is zero, nu is 1
         k2 = a**2 + b**2
         print("a, b, Re:",a,b,Re)
 
@@ -214,12 +219,20 @@ class linearize(object):
 
         # where LOS =   1/Re . (D2-k^2 I)^2 + i.a.d2U - i.a.U.(D2-k^2 I)
         #       LSQ =   1/Re . (D2-k^2 I) - i.a.U   
+        # However, when eddy viscosity is included, these change to
+        #       LOS =   i.a.d2U - i.a.U.(D2-k^2 I) + 1/Re*{ nu*(D2 - k^2 I)^2 + 2 nu' (D3 - k^2 D) + nu'' (D2 + k^2 I) }
+        #       LSQ =   - i.a.U + 1/Re { nu (D2-k^2 I)  + nu' D}
+        nu_ = np.diag(nu)
+        dnu_ = np.diag( D1_ @ nu)
+        d2nu_ = np.diag( D2_ @ nu)
 
-        LOS  = (1./Re) * (k2*k2*I - 2.*k2*D2_ + D4_ ) + 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   
+        LOS  = 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   \
+                +(1./Re) *(  nu_ @ (k2*k2*I - 2.*k2*D2_ + D4_ ) + 2.* dnu_ @ D1_ @ ( D2_ - k2 *I)
+                            + d2nu_ @ (D2_ + k2 * I)    )
         DeltaMat = D2_ - k2*I        
         DeltaInv = np.linalg.solve(DeltaMat, I) 
 
-        LSQ  = (1./Re)* (D2_ -k2*I ) - 1.j*a*U_   
+        LSQ  = - 1.j*a*U_  + (1./Re)*( nu_ @  (D2_ -k2*I ) + dnu_ @ D1_ ) 
 
         OSS =  np.vstack(( np.hstack( (DeltaInv @ LOS, Z   ) ),\
                            np.hstack( (-1.j*b*dU_    ,  LSQ) ) ))
@@ -272,9 +285,11 @@ class linearize(object):
         
         if custom:
             # This is a simpler conversion matrix that I built
+            
             convertMat = np.vstack((
                 np.hstack(( Z      , I,   Z      )),
                 np.hstack(( 1.j*b*I, Z, -1.j*a*I )) ))
+            coeffMat = np.identity(convertMat.shape[0])
         else:
             # This is the one from Jovanovic and Bamieh (2005)
             Delta = self.D2 - (a**2 + b**2) * I
@@ -360,6 +375,7 @@ class statComp(linearize):
         self.a = a
         self.b = b
         self.Re = Re
+        self.nu = kwargs.get('nu', np.ones(self.N))
         if 'covMat' not in kwargs:
             a0 = 0.25; b0 = 2./3.; N = self.N
             covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
@@ -401,7 +417,7 @@ class statComp(linearize):
 
         return
 
-    def makeSystem(self):
+    def makeSystem(self,**kwargs):
         """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v
         Inputs:
             None 
@@ -419,7 +435,7 @@ class statComp(linearize):
             then A_psi, the dynamics matrix, relates to A_phi (which is the OSS matrix) as
             A_psi = Q^{1/2} A_phi Q^{-1/2}
         """
-        A_phi = linearize.dynamicsMat(self, a=self.a, b=self.b)  # OSS matrix describing the evolution of phi = [v, eta]^T
+        A_phi = linearize.dynamicsMat(self, a=self.a, b=self.b,**kwargs)  # OSS matrix describing the evolution of phi = [v, eta]^T
         C_phi = linearize.velVor2primitivesMat(self, a=self.a, b=self.b)    # v = C_phi * phi
         W = np.diag( np.concatenate(( self.w, self.w, self.w )) )    # The weight matrix for integrating over chebyshev nodes
         Wsqrt = np.diag( np.sqrt( np.concatenate(( self.w, self.w, self.w )) ) )           
@@ -449,7 +465,7 @@ class statComp(linearize):
 
         return A_psi, C_psi, B_psi
 
-    def makeAdjSystem(self):
+    def makeAdjSystem(self,**kwargs):
         """ Build adjoint system.
         Inputs:
             None
@@ -471,7 +487,7 @@ class statComp(linearize):
         d2Umat = np.diag(self.d2U)
 
 
-        A, C, B = self.makeSystem()
+        A, C, B = self.makeSystem(**kwargs)
         Badj = C.copy()
         Cadj = B.copy()
 
@@ -508,10 +524,11 @@ class statComp(linearize):
         kwargs['rankPar'] = kwargs.get('rankPar',200.)
         print("Parameters of the statComp instance are:")
         print("a:%.2g, b:%.2g, Re:%d, N:%d, rankPar:%.1g"%(self.a, self.b, self.Re, self.N, kwargs['rankPar']))
-        A , C = self.makeSystem()
+        A , C, B = self.makeSystem()
+        Aadj, Cadj, Badj = self.makeAdjSystem()
         statsOut = minimize.minimize( A,
                 outMat = C, structMat = self.structMat,
-                covMat = self.covMat, **kwargs)
+                covMat = self.covMat, outMatAdj = Cadj, dynMatAdj = Aadj, **kwargs)
         if savePrefix is not None:
             fName = kwargs.get('savePath','') + savePrefix
             a0 = 0.25; b0 = 2./3.
@@ -722,7 +739,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
 
     dU = D1 @ U
     d2U = D2 @ U
-    outDict = {'U':U, 'dU':dU, 'd2U':d2U,'y':zArr-1.}
+    outDict = {'U':U, 'dU':dU, 'd2U':d2U,'y':zArr-1.,'nu': 1.+nuT(zArr)}
 
     return outDict 
 

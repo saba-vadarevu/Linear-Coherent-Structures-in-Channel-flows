@@ -276,7 +276,7 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
             #print("logdetLadjYnew, dualYnew:", logDetLadjYnew, dualYnew)
             if np.amin( evalsLadjYnew ) < 0.:
                 stepSize = stepSize * beta    # Backtrack the step
-                print("Reducing step size coz evals<0.....")
+                #print("Reducing step size coz evals<0.....")
             elif ( dualYnew < dualY + \
                             np.trace( gradD1 *(Y1new - Y1)) + \
                             np.trace( gradD2 *(Y2new - Y2)) - \
@@ -284,9 +284,9 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
                             (0.5/stepSize) * norm(Y2new - Y2, ord='fro')**2 ):
                 # Note: Frobenius norm essentially flattens the array and calculates a vector 2-norm
                 stepSize = stepSize * beta
-                print("Reducing step size coz dualYnew < .....")
+                #print("Reducing step size coz dualYnew < .....")
             else:
-                print("Not reducing the step size...")
+                #print("Not reducing the step size...")
                 break
                 # So this is where we're breaking out of the inner loop
                 # I suppose what's happening here is we're checking if the primal residual is acceptable

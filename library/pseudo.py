@@ -135,7 +135,7 @@ def _chebdotvec(arr1,arr2,Nint):
     prod = prod.reshape((arr1.size//Nint, Nint))
     wvec = clencurt(Nint).reshape((1,Nint))
 
-    return 0.5* np.sum( (prod*wvec).flatten() )
+    return np.sum( (prod*wvec).flatten() )
 
 
 def chebnorm(arr,Nint):
