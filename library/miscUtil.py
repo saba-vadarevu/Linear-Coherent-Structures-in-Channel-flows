@@ -162,6 +162,57 @@ def nodesCellCenters(nCells=192,**kwargs):
     #   because the DNS data is saved from 0 to 2 (i.e., increasing y)
     return zCC[::-1]
 
+def cenDiff(arr, nCells=192,**kwargs):
+    """ Returns differentiation matrix for (1st order accurate) central difference on cell-center nodes
+        (see nodesCellCenters)
+        Inputs:
+            arr : Scalar data on cell-center nodes 
+            nCells (=192): Number of cells. 
+                        Currently, ghost cells are not supported. 
+            kwargs:
+                bvals: list/array/ordered pair with bvals at 1 and -1
+                    Default is (0,0)
+        Outputs:
+            dArr: First derivative of the array supplied
+    """
+    # My code is presently built to handle data only on internal nodes, i.e. without walls
+    # This differentiation matrix supposes that whatever field it is we're differentiating is zero at the walls
+    # To allow for easy central differencing without any mess, I'm adding nodes for the walls
+
+    # The derivative is calculated like so:
+    # For function f with values fi on grid points yi, 
+    # Then, f'i is given as
+    #   f'i =   (yi-yim1)/(yip1-yim1) * (fip1-fi)/(yip1-yi)  + (yip1-yi)/(yip1-yim1) * (fi-fim1)/yi-yim1)
+
+    # Refer to http://cfd.mace.manchester.ac.uk/twiki/pub/Main/TimCraftNotes_All_Access/cfd1-findiffs.pdf for derivation, which can be expressed in simpler terms as above
+    assert arr.size == nCells
+    bvals = kwargs.get('bvals', [0.,0.])
+    f = np.zeros(nCells+2, dtype=arr.dtype)
+    f[1:-1] = arr
+    f[0] = bvals[0]; f[-1] = bvals[-1]
+
+    yCC = np.zeros(nCells+2)
+    yCC[1:-1] = nodesCellCenters(nCells=nCells, nGhost=0, Lz=2.)
+    yCC[-1] = 2.
+    # yCC from nodesCellCenters goes from 0 to 2 (both exclusive) instead of my usual convention of -1 to 1. 
+    # Actually, my convention is for y to go from 1 to -1, not -1 to 1. To reflect this:
+    yCC = yCC[::-1]
+    warn("arr supplied to cenDiff must be on y from 1 to -1, NOT -1 to 1")
+
+    ym1 = yCC[:-2]
+    y0  = yCC[1:-1]
+    yp1 = yCC[2:]
+
+    fm1 = f[:-2]
+    f0  = f[1:-1]
+    fp1 = f[2:]
+
+    df = (y0-ym1)/(yp1-ym1) * (fp1-f0)/(yp1-y0)  +  (yp1-y0)/(yp1-ym1) * (f0-fm1)/(y0-ym1)
+    
+    return  df 
+
+
+
 def interpDNS(ccArr,**kwargs):
     """
     Interpolate data from DNS on cell-centers to the Chebyshev nodes. Scipy's cubic splines are used.

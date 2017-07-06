@@ -96,18 +96,18 @@ def minimize(dynMat, outMat = None, structMat = None, covMat =None, rankPar=10.,
 
     Z0 = optDict.get("Z0",None); X0 = optDict.get("X0",None); Y10 = optDict.get("Y10",None); Y20 = optDict.get("Y20",None)
     if Z0 is None:
-        warn("No Z0 supplied, using identity...")
+        print("No Z0 supplied, using identity...")
         Z0 = np.identity(nState , dtype=dynMat.dtype )
     if X0 is None:
-        warn("No X0 supplied, solving Lyapunov equation with Z0")
+        print("No X0 supplied, solving Lyapunov equation with Z0")
         X0 = solve_lyapunov( dynMat, -Z0 )
     X0 = np.asmatrix(X0);   Z0 = np.asmatrix(Z0)
 
     if Y10 is None:
-        warn("No Y10 supplied, solving adjoing Lyapunov equation")
+        print("No Y10 supplied, solving adjoing Lyapunov equation")
         Y10 = solve_lyapunov( dynMat.H, X0)
         if not hasattr(Y10, "H"):
-            warn("Y10 from solve_lyapunov does not have attribute 'H', so it's an ndarray and not a matrix. I've recast it into matrix, but have a look at why this is happening....")
+            print("Y10 from solve_lyapunov does not have attribute 'H', so it's an ndarray and not a matrix. I've recast it into matrix, but have a look at why this is happening....")
         Y10 = np.asmatrix(Y10)
         Y10 = rankPar * Y10 / norm(Y10,2) # Norm returns largest singular value
     else:

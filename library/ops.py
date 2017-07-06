@@ -224,8 +224,9 @@ class linearize(object):
         #       LOS =   i.a.d2U - i.a.U.(D2-k^2 I) + 1/Re*{ nu*(D2 - k^2 I)^2 + 2 nu' (D3 - k^2 D) + nu'' (D2 + k^2 I) }
         #       LSQ =   - i.a.U + 1/Re { nu (D2-k^2 I)  + nu' D}
         nu_ = np.diag(nu)
-        dnu_ = np.diag( D1_ @ nu)
-        d2nu_ = np.diag( D2_ @ nu)
+        warn("dnu and d2nu are currently set to zero. Revisit this to implement eddy viscosity.")
+        dnu_ = np.zeros(D1_.shape)
+        d2nu_ = np.zeros(D1_.shape)
 
         LOS  = 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   \
                 +(1./Re) *(  nu_ @ (k2*k2*I - 2.*k2*D2_ + D4_ ) + 2.* dnu_ @ D1_ @ ( D2_ - k2 *I)
@@ -418,7 +419,7 @@ class statComp(linearize):
 
         return
 
-    def makeSystem(self,**kwargs):
+    def makeSystem(self,weight=True,**kwargs):
         """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v
         Inputs:
             None 
@@ -439,6 +440,8 @@ class statComp(linearize):
         A_phi = linearize.dynamicsMat(self, a=self.a, b=self.b,**kwargs)  # OSS matrix describing the evolution of phi = [v, eta]^T
         C_phi = linearize.velVor2primitivesMat(self, a=self.a, b=self.b)    # v = C_phi * phi
         W = np.diag( np.concatenate(( self.w, self.w, self.w )) )    # The weight matrix for integrating over chebyshev nodes
+        if not weight:
+            W = np.identity(W.shape[0])
         Wsqrt = np.diag( np.sqrt( np.concatenate(( self.w, self.w, self.w )) ) )           
         
         Q = C_phi.conj().T  @ W @ C_phi

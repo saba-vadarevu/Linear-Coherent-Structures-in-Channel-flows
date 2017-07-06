@@ -319,7 +319,36 @@ def chebint(fk, x):
     D = 1/(D+speps*(D==0))
     p = np.dot(D,(w*fk))/(np.dot(D,w))
     return p
+
+def chebFilter(arr, Ndrop=1, **kwargs):
+    """ Filter array of data on chebyshev grid by dropping the last 'Ndrop' cheb polynomials
+    Input:
+        arr: Collocated data on Cheb nodes
+        Ndrop (=1): Number of coefficients to drop
+        kwargs:
+            N: Number of Cheb nodes. 
+                If supplied, reshape array as (arr.size//N, N),
+                If not supplied, use arr.shape[-1]
+    Output:
+        filteredArr: Collocated data, filtered 
+        Same shape as arr
+    """
+    N = kwargs.get('N', arr.shape[-1])
+    assert Ndrop <= N
+    if (Ndrop > 10) or (Ndrop > N/3):
+        warn("Are you dropping too many modes? Ndrop is %d, N is %d"%(Ndrop,N))
     
+    arrTmp = arr.reshape((arr.size//N, N))
+    filteredArr = arrTmp.copy()
+    coeffArr = chebcoeffs(arr.reshape((arr.size//N, N)))
+    coeffArr[:,-Ndrop:] = 0.
+    filteredArr = chebcoll_vec(coeffArr)
+
+    return filteredArr.reshape(arr.shape)
+
+
+
+
 def _chebIntegrateVec(v):
     """ For input 'v' on internal Chebyshev nodes, return \int_{-1}^y v(Y) dY """
     assert v.ndim == 1
