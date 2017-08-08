@@ -324,6 +324,50 @@ def DNSderivs(U,**kwargs):
 
 
 
+def binarySearch(someFun, minVar, maxVar, tol=1.0e-03, nSteps=20, **kwargs):
+    """ Find var satisfying  |someFun(var, **kwargs)| <= tol, for var in [minVar,maxVar]
+    Exit with warning (print) if someFun does not change sign from minVar to maxVar
+    Inputs:
+        someFun: Function that takes exactly one positional argument. Keyword arguments are allwed.
+        minVar :  Lower bound on variable for binary search
+        maxVar :  Upper bound on variable for binary search
+        tol (=0.001):  Tolerance for the zero of someFun()
+        nSteps (=20):  Number of steps for binary search
+        **kwargs:      Keyword arguments to pass to someFun()
+    Outputs:
+        newVar:     Variable at which abs value of someFun() goes below tolerance
+    """
+    newFun = lambda var: someFun(var,**kwargs)
+    tolMet = lambda var: np.abs(var) <= tol
+    signChange = lambda var1,var2: newFun(var1) * newFun(var2) < 0.
+    # If tolerance is met at either minVar or maxVar, don't do the search
+    if tolMet(newFun(minVar)): 
+        print("tolerance %.3g met at minVar=%.3g. Returning..."%(tol,minVar))
+        return minVar
+    if tolMet(newFun(maxVar)): 
+        print("tolerance %.3g met at maxVar=%.3g. Returning..."%(tol,maxVar))
+        return maxVar
 
+    assert minVar < maxVar
+    assert signChange(minVar, maxVar)
+    for n in range(nSteps):
+        newVar = (minVar + maxVar)/2.
+        if tolMet(newFun(newVar)): return newVar
+        if signChange(minVar, newVar):
+            maxVar = newVar
+            continue
+        elif signChange(newVar, maxVar):
+            minVar = newVar
+            continue
+        else:
+            print("Something's not right in the binary search")
+            print("minVar, newVar, maxVar are", minVar, newVar, maxVar)
+            print("function evals at these values are", newFun(minVar), newFun(newVar), newFun(maxVar))
+            print("returning newVar...")
+            return newVar
+    print("max steps reached in binary search. Returning..")
+    return newVar
+                                            
+                                                                                                                                                                                                                                                        
 
 

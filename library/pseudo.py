@@ -45,7 +45,7 @@ from scipy.linalg import toeplitz
 from scipy.fftpack import ifft
 from warnings import warn
 
-def chebdif(Nint,M):
+def chebdif(Nint,M,walls=False):
     """ y,DM =chebdif(Nint,M):  Differentiation matrices for Chebyshev collocation.
     Inputs: 
         Nint:  Number of internal nodes
@@ -98,11 +98,15 @@ def chebdif(Nint,M):
         DM[:,:,ell] = D
 
     # Return collocation nodes as a 1-D array
-    return  x[1:-1,0] , np.ascontiguousarray(DM[1:-1, 1:-1])
+    if not walls:
+        return  x[1:-1,0] , np.ascontiguousarray(DM[1:-1, 1:-1])
+    else:
+        return  x[:,0] , DM
+
 
 
 	
-def clencurt(Nint):
+def clencurt(Nint,walls=False):
     """ w = clencurt(Nint): Computes the Clenshaw Curtis weights on internal Chebyshev nodes, including a factor of 0.5
     Inputs:
         Nint:  Number of internal Chebyshev collocation nodes
@@ -125,7 +129,10 @@ def clencurt(Nint):
         F = np.real(ifft(V, n=None, axis=0))
         x = F[0:n1,1]
         w = np.hstack((F[0,0],2*F[1:n,0],F[n,0]))
-    return 0.5 * w[1:-1]
+    if walls:
+        return 0.5*w
+    else:
+        return 0.5 * w[1:-1]
 
 def _chebdotvec(arr1,arr2,Nint):
     # This function computes inner products of vectors ONLY.
@@ -208,21 +215,21 @@ def chebnorml(arr,Nint,l=2):
         norm:   l-norm, weighted by clenshaw-curtis weights."""
     return _chebdotvec( np.abs(arr.flatten())**l   , np.ones(arr.size) , Nint) 
 
-def _chebcoeffsvec(f,truncate=True):
+def _chebcoeffsvec(f,truncate=True, bVals = [0.,0.]):
     f = f.flatten(); Nint = f.size; N = Nint+2
     fWalled = np.zeros(f.size+2, dtype=f.dtype) # Create an array that also has nodes at the walls
     fWalled[1:-1] = f
-    a =  np.fft.fft(np.append(f,f[N-2:0:-1]))  
+    a =  np.fft.fft(np.append(fWalled,fWalled[N-2:0:-1]))  
     a = a[:N]/(N-1.)*np.concatenate(([0.5],np.ones(N-2),[0.5]))
     # Now this is tricky. I actually have info for Nint+2 Chebyshev polynomials, but I don't want to make my code inconsistent.
     # I'll ignore the coefficients for the last two Chebyshev polynomials
     if truncate:
-        return a[:-2]
+        return a[:-2].astype(f.dtype)
     else:
-        return a
+        return a.astype(f.dtype)
 
 
-def chebcoeffs(f,truncate=True):
+def chebcoeffs(f,truncate=True,**kwargs):
     """coeffs = chebcoeffs(f,truncate=True): Coefficients of Chebyshev polynomials (first kind) for given collocated values.
     Inputs:
         f: Function values on 'Nint' internal Chebyshev nodes (Nint= f.size if f is 1d)
@@ -230,10 +237,11 @@ def chebcoeffs(f,truncate=True):
             If f is multidimensional, the last axis size is taken as Nint
         truncate (=True): To ensure size of f and coeffs is consistent, I drop the coefficients for the last two Chebyshev polynomials
                         If truncate is False, retain the last two coefficients and return coeffs with last axis having Nint+2 elements
+        bVals (=[0.,0.]): Use this to set non-zero values at the walls for the collocated vector.
     Outputs:
         coeffs: Array of coefficients of Chebyshev polynomials (first kind) from 0 to N-3 (Nint -1)""" 
     if (f.ndim == 1):
-        return _chebcoeffsvec(f,truncate=truncate)
+        return _chebcoeffsvec(f,truncate=truncate,**kwargs)
     
     shape = list(f.shape)
     Nint= f.shape[-1]
@@ -265,7 +273,7 @@ def _chebcoll_vec_vec(a,truncated=True):
 
     f = np.fft.ifft(np.append(a,a[N-2:0:-1]))
     
-    return f[:Nint]
+    return f[:Nint].astype(a.dtype)
 
 
 	
@@ -320,7 +328,7 @@ def chebint(fk, x):
     p = np.dot(D,(w*fk))/(np.dot(D,w))
     return p
 
-def chebFilter(arr, Ndrop=1, **kwargs):
+def chebFilter(arr, Ndrop=1, symms=None, **kwargs):
     """ Filter array of data on chebyshev grid by dropping the last 'Ndrop' cheb polynomials
     Input:
         arr: Collocated data on Cheb nodes
@@ -341,7 +349,13 @@ def chebFilter(arr, Ndrop=1, **kwargs):
     arrTmp = arr.reshape((arr.size//N, N))
     filteredArr = arrTmp.copy()
     coeffArr = chebcoeffs(arr.reshape((arr.size//N, N)))
-    coeffArr[:,-Ndrop:] = 0.
+    if Ndrop != 0:
+        coeffArr[:,-Ndrop:] = 0.
+    
+    # For odd or even symmetries, I can further filter the wall-normal profile
+    if symms == 'even': coeffArr[:, 1::2] = 0.
+    elif symms == 'odd': coeffArr[:,::2] = 0.
+
     filteredArr = chebcoll_vec(coeffArr)
 
     return filteredArr.reshape(arr.shape)
@@ -486,7 +500,31 @@ def cheb4c(Nint,returnAll=False):
         return DM[:,:,3]
 
 
-
+def weightMats(N, walls=False):
+    """ Return a dictionary of different weight matrices (see outputs)
+    Inputs:
+        N: Number of internal collocation nodes
+        walls (optional, =False): If True, weight matrices include entries for walls
+    Outputs:
+        weightDict with keys
+            'W2': 2Nx2N weight matrix with clencurt vector on diagonal
+            'W3': 3Nx3N, as above
+            'W2Sqrt': Similar to W2, but with diagonal elements square-rooted
+            'W3Sqrt': 3Nx3N as above
+            'W2SqrtInv': Similar to W2Sqrt, but diagonal elements inverted
+            'W3SqrtInv': Similar to W3Sqrt, but diagonal elements inverted
+        If walls is True, all of the above matrices use Np = N+2 in size instead of N
+    """
+    w = clencurt(N,walls=walls)
+    W2          = np.diag(              np.concatenate((w,w  ))   )
+    W3          = np.diag(              np.concatenate((w,w,w))   )
+    W2Sqrt      = np.diag(   np.sqrt(   np.concatenate((w,w  )) ) )
+    W3Sqrt      = np.diag(   np.sqrt(   np.concatenate((w,w,w)) ) )
+    W2SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w  )) ) )
+    W3SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w,w)) ) )
+    weightDict = {'W2':W2, 'W3':W3, 'W2Sqrt':W2Sqrt, 'W3Sqrt':W3Sqrt,\
+            'W2SqrtInv':W2SqrtInv, 'W3SqrtInv':W3SqrtInv }
+    return weightDict 
 
 
 #--------------------------------------------------------------------------------

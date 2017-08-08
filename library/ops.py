@@ -22,7 +22,7 @@ IMPORTANT: Everything here is written only for internal nodes.
             Variables at the wall are always ignored. 
             y,v represent wall-normal
 """
-covDataDir = os.environ['DATA']+ 'cov/'
+covDataDir = os.environ['DATA']+ 'covN127/'
 class linearize(object):
     def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel",Re=10000., **kwargs):
         """
@@ -250,6 +250,7 @@ class linearize(object):
         """
         return self.OSS(**kwargs)
 
+
     def velVor2primitivesMat(self,**kwargs):
         """ Defines a matrix convertMat: [u,v,w]^T = convertMat @ [v,eta]^T.
         Input: 
@@ -257,7 +258,7 @@ class linearize(object):
         Output:
             3N x 2N matrix convertMat """
 
-        a = kwargs.get('a', 2./3. )
+        a = kwargs.get('a', 2.5 )
         b = kwargs.get('b', 20./3.)
         
         Z = np.zeros((self.N, self.N), dtype=np.complex)
@@ -272,14 +273,17 @@ class linearize(object):
 
         return convertMat
 
+    def outputMat(self,**kwargs):
+        return self.velVor2primitivesMat(**kwargs)
+
     def primitives2velVorMat(self, custom=False, **kwargs):
         """ Defines a matrix convertMat: [v,eta]^T = convertMat @ [u,v,w]^T.
         Input: 
-            dict with wavenumbers (a,b) = (2./3.,20./3.) 
+            dict with wavenumbers (a,b) = (2.5,20./3.) 
         Output:
             3N x 2N matrix convertMat """
 
-        a = kwargs.get('a', 2./3. )
+        a = kwargs.get('a', 2.5 )
         b = kwargs.get('b', 20./3.)
         
         Z = np.zeros((self.N, self.N), dtype=np.complex)
@@ -367,8 +371,8 @@ class statComp(linearize):
             dynamicsMat (weighted negative of the OSS matrix)
             outputMat   (weighted matrix for converting velocity vorticity to velocities)
         """
-        kwargs['N'] = kwargs.get('N', 48)
-        if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') is 'channel'):
+        kwargs['N'] = kwargs.get('N', 62)
+        if (kwargs.get('U',None) is None) and (kwargs.get('flowClass','channel') == 'channel'):
             # If U and its derivatives are not supplied, use curve-fit from ops.turbMeanChannel()
             outDict = turbMeanChannel(Re=Re,**kwargs)
             kwargs.update(outDict)
@@ -382,8 +386,9 @@ class statComp(linearize):
             a0 = 0.25; b0 = 2./3.; N = self.N
             covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
             print("covMat was not supplied. Loading matrix from %s ..."%(covfName))
-            covMatTemp = 0.5 * np.load(covfName)    
+            #covMatTemp = 0.5 * np.load(covfName)    
             # The 0.5 factor is needed because the weight matrix used when computing covarainces did not include this 0.5 
+            covMatTemp = np.load(covfName)   # Don't need the 0.5 factor anymore, weighting's fixed.
             print("covMat from DNS data has y as spanwise. Reordering to have y as wall-normal......")
             covMat = covMatTemp.copy()
             covMat[0*N:1*N, 1*N:2*N ] = covMatTemp[0*N:1*N, 2*N:3*N]    # Assign uw* from DNS to uv* in linear modelling 
@@ -437,12 +442,12 @@ class statComp(linearize):
             then A_psi, the dynamics matrix, relates to A_phi (which is the OSS matrix) as
             A_psi = Q^{1/2} A_phi Q^{-1/2}
         """
-        A_phi = linearize.dynamicsMat(self, a=self.a, b=self.b,**kwargs)  # OSS matrix describing the evolution of phi = [v, eta]^T
-        C_phi = linearize.velVor2primitivesMat(self, a=self.a, b=self.b)    # v = C_phi * phi
-        W = np.diag( np.concatenate(( self.w, self.w, self.w )) )    # The weight matrix for integrating over chebyshev nodes
-        if not weight:
-            W = np.identity(W.shape[0])
-        Wsqrt = np.diag( np.sqrt( np.concatenate(( self.w, self.w, self.w )) ) )           
+        A_phi = self.dynamicsMat()  # OSS matrix describing the evolution of phi = [v, eta]^T
+        C_phi = self.velVor2primitivesMat()    # v = C_phi * phi
+        
+        weightDict = pseudo.weightMats(self.N)
+        Wsqrt = weightDict['W3Sqrt']
+        W = weightDict['W3']
         
         Q = C_phi.conj().T  @ W @ C_phi
         Qsqrt = sqrtm(Q)     # Routine from scipy for square root of matrices
@@ -469,6 +474,79 @@ class statComp(linearize):
 
         return A_psi, C_psi, B_psi
 
+    def dynamicsMat(self,**kwargs):
+        return linearize.dynamicsMat(self,a=self.a, b=self.b, **kwargs)
+
+    def outputMat(self,**kwargs):
+        return linearize.outputMat(self, a=self.a, b=self.b, **kwargs)
+    
+    def makeSystemNew(self,weight=True,**kwargs):
+        """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v, based on JB05 instead of my own definitions.
+        Inputs:
+            None 
+        Outputs:
+            A_psi:  Dynamics matrix; d_t psi = A_psi  psi  + forcing
+            C_psi:  Output matrix;  W^1/2  v  =  C_psi  psi
+            B_psi:  Complex conjugate of output matrix"""
+           
+
+        """         """
+        a = self.a; b=self.b; N = self.N
+        
+        k2 = a**2 + b**2
+        Z1 = np.zeros((N,N), dtype=np.complex)
+        I1 = np.identity(1*N, dtype=np.complex)
+        I2 = np.identity(2*N, dtype=np.complex)
+        I3 = np.identity(3*N, dtype=np.complex)
+
+        weightDict = pseudo.weightMats(N=N)
+        W2  = weightDict['W2']
+        W3  = weightDict['W3']
+        W2s = weightDict['W2Sqrt']
+        W2si= weightDict['W2SqrtInv']
+        W3s = weightDict['W3Sqrt']
+        W3si= weightDict['W3SqrtInv']
+
+        Delta = self.D2 - k2 * I1
+        Q = (1./k2) * np.vstack((   np.hstack(( -Delta, Z1)), 
+                                        np.hstack(( Z1,  I1))    ))
+
+        Q = (W2) @ Q
+        Qs = sqrtm(Q)
+        Qsi= np.linalg.solve(Qs, I2)
+
+
+        Aphi = self.dynamicsMat()
+        Cphi = self.velVor2primitivesMat()
+        Bphi = self.primitives2velVorMat(custom=False)
+        Apsi = Qs @ Aphi @ Qsi
+        Bpsi = Qs @ Bphi @ W3si
+        Cpsi = W3s@ Cphi @ Qsi
+        
+        return Apsi, Cpsi, Bpsi
+
+    def stateTrans(self):
+        """ Return Q^{1/2} in psi = Q^{1/2} phi """
+        a = self.a; b=self.b; N = self.N
+        
+        k2 = a**2 + b**2
+        Z1 = np.zeros((N,N), dtype=np.complex)
+        I1 = np.identity(1*N, dtype=np.complex)
+        I2 = np.identity(2*N, dtype=np.complex)
+        I3 = np.identity(3*N, dtype=np.complex)
+
+        weightDict = pseudo.weightMats(N=N)
+        W2  = weightDict['W2']
+
+        Delta = self.D2 - k2 * I1
+        Q = (1./k2) * np.vstack((   np.hstack(( -Delta, Z1)), 
+                                        np.hstack(( Z1,  I1))    ))
+
+        Q = (W2) @ Q
+        Qs = sqrtm(Q)
+        return Qs
+
+    
     def makeAdjSystem(self,**kwargs):
         """ Build adjoint system.
         Inputs:
@@ -507,8 +585,38 @@ class statComp(linearize):
         Aadj = np.vstack(( 
                     np.hstack(( Aadj11, Aadj21 )),
                     np.hstack((  Z    , Aadj22 ))   ))
+        # This Aadj here is just for the OSS matrix and does not account for the transformation in state
+        # We need some additional matrices
+        weightDict = pseudo.weightMats(self.N)
+        Wsqrt = weightDict['W3Sqrt']
+        W = weightDict['W3']
+        C_phi = self.velVor2primitivesMat()
+        
+        Q = C_phi.conj().T  @ W @ C_phi
+        Qsqrt = sqrtm(Q)     # Routine from scipy for square root of matrices
+        QsqrtInv = np.linalg.solve( Qsqrt, np.identity(Qsqrt.shape[0]) )
+        
+        Aadj = Qsqrt @ Aadj @ QsqrtInv
 
         return Aadj, Cadj, Badj
+
+    def covMatSymmetry(self):
+        """ Impose symmetries on the covariance matrix, self.covMat 
+        Even symmetry for uu, ww, uw, vv, and odd symmetry for uv, wv
+        Inputs:
+            None
+        Outputs:
+            None. Adds a new attribute covMatSymm to self"""
+        symmIndArr = np.array([1,-1,1]).reshape(1,3) * np.array([1,-1,1]).reshape(3,1)
+        covMatSymm = self.covMat.copy()
+        N = self.N
+        for ind0 in range(3):
+            for ind1 in range(3):
+                covBlock= covMatSymm[ind0*N:(ind0+1)*N , ind1*N: (ind1+1)*N ] 
+                covBlock = 0.5*( covBlock + symmIndArr[ind0,ind1] * covBlock[::-1,::-1] )
+                covMatSymm[ind0*N:(ind0+1)*N , ind1*N: (ind1+1)*N ] = covBlock
+        self.covMatSymm = covMatSymm
+        return
 
 
     def completeStats(self,savePrefix='outStats',**kwargs):
