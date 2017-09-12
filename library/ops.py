@@ -76,7 +76,7 @@ class linearize(object):
             D4 = pseudo.cheb4c(N)       # Imposes clamped BCs
             w = pseudo.clencurt(N)      # Weights matrix
        
-        self.__version__ = '8.1.1'    # m.c, m is month and c is major commit in month
+        self.__version__ = '6.2.3'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -117,7 +117,8 @@ class linearize(object):
         self.flowClass = flowClass
 
         print("Initialized instance of 'linearize', version %s." %(self.__version__),
-                "New in this version: Eddy viscosity fixed",sep="\n")
+                "New in this version: pseudo module is defined for internal nodes ",
+                "To fix: Eddy viscosity, resolvent, and svd are currently not supported.",sep="\n")
 
         return
         
@@ -193,8 +194,7 @@ class linearize(object):
         a = kwargs.get('a', 2.5)
         b = kwargs.get('b', 20./3.)
         Re= self.Re
-        #nu= kwargs.get('nu', np.ones(self.N))   
-        nu = self.nu
+        nu= kwargs.get('nu', np.ones(self.N))   
         # If total viscosity is not supplied as a keyword argument, use molecular viscosity
         # Include this term in the formulation as nu/Re, where nu is the ratio of total viscosity to molecular viscosity.
         # When eddy viscosity is zero, nu is 1
@@ -223,13 +223,10 @@ class linearize(object):
         # However, when eddy viscosity is included, these change to
         #       LOS =   i.a.d2U - i.a.U.(D2-k^2 I) + 1/Re*{ nu*(D2 - k^2 I)^2 + 2 nu' (D3 - k^2 D) + nu'' (D2 + k^2 I) }
         #       LSQ =   - i.a.U + 1/Re { nu (D2-k^2 I)  + nu' D}
-        if nu[0] != nu[-1]: nu[-(self.N//2):] = nu[:self.N//2][::-1]
-        dnu  = getattr(self,'dnu', np.zeros(self.N))   # nu should be 1 at the wall even with eddy viscosity
-        d2nu  = getattr(self,'d2nu', np.zeros(self.N))   # nu should be 1 at the wall even with eddy viscosity
         nu_ = np.diag(nu)
         warn("dnu and d2nu are currently set to zero. Revisit this to implement eddy viscosity.")
-        dnu_ = np.diag(dnu)
-        d2nu_ = np.diag(d2nu)
+        dnu_ = np.zeros(D1_.shape)
+        d2nu_ = np.zeros(D1_.shape)
 
         LOS  = 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   \
                 +(1./Re) *(  nu_ @ (k2*k2*I - 2.*k2*D2_ + D4_ ) + 2.* dnu_ @ D1_ @ ( D2_ - k2 *I)
@@ -251,7 +248,6 @@ class linearize(object):
             [v_t, eta_t] = A [v,eta].
             This dynamics matrix A is the same as the OSS matrix
         """
-        #if kwargs.get('useEddy',False): kwargs['nu'] = 1. + self.nuEddy
         return self.OSS(**kwargs)
 
 
@@ -386,7 +382,6 @@ class statComp(linearize):
         self.b = b
         self.Re = Re
         self.nu = kwargs.get('nu', np.ones(self.N))
-        self.nuEddy = self.Re * self.y /  self.dU
         if 'covMat' not in kwargs:
             a0 = 0.25; b0 = 2./3.; N = self.N
             covfName = glob.glob(covDataDir+'cov*l%02dm%02d.npy'%(a/a0,b/b0))[0]
@@ -447,7 +442,7 @@ class statComp(linearize):
             then A_psi, the dynamics matrix, relates to A_phi (which is the OSS matrix) as
             A_psi = Q^{1/2} A_phi Q^{-1/2}
         """
-        A_phi = self.dynamicsMat(**kwargs)  # OSS matrix describing the evolution of phi = [v, eta]^T
+        A_phi = self.dynamicsMat()  # OSS matrix describing the evolution of phi = [v, eta]^T
         C_phi = self.velVor2primitivesMat()    # v = C_phi * phi
         
         weightDict = pseudo.weightMats(self.N)
@@ -484,9 +479,6 @@ class statComp(linearize):
 
     def outputMat(self,**kwargs):
         return linearize.outputMat(self, a=self.a, b=self.b, **kwargs)
-
-    def inputMat(self,**kwargs):
-        return linearize.primitives2velVorMat(self, a=self.a, b=self.b, **kwargs)
     
     def makeSystemNew(self,weight=True,**kwargs):
         """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v, based on JB05 instead of my own definitions.
@@ -852,7 +844,6 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
             d2U:    Turbulent mean and its derivatives on Chebyshev grid with N nodes, normalized by friction velocity
             z:  Internal chebyshev nodes
     """
-    kwargs['walls'] = kwargs.get('walls',False)
     if Re == 186.:
         alfa = 46.5
         kapa = 0.61
@@ -869,7 +860,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
                              (1. - np.exp( (np.abs(zt-1.)-1.)*Re/alfa )   )    )**2)
 
     intFun = lambda xi: Re * (1.-xi)/(1. + nuT(xi)) 
-    zArr,DM = pseudo.chebdif(N,2,walls=kwargs['walls'])
+    zArr,DM = pseudo.chebdif(N,2)
     D1 = DM[:,:,0]    # Same for diff mats - only internal nodes
     D2 = DM[:,:,1]
 
