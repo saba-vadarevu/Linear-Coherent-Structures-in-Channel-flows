@@ -516,14 +516,18 @@ def weightMats(N, walls=False):
         If walls is True, all of the above matrices use Np = N+2 in size instead of N
     """
     w = clencurt(N,walls=walls)
+    W1          = np.diag(              w      )
     W2          = np.diag(              np.concatenate((w,w  ))   )
     W3          = np.diag(              np.concatenate((w,w,w))   )
+    W1Sqrt      = np.diag(   np.sqrt(   w     ) )
     W2Sqrt      = np.diag(   np.sqrt(   np.concatenate((w,w  )) ) )
     W3Sqrt      = np.diag(   np.sqrt(   np.concatenate((w,w,w)) ) )
+    W1SqrtInv   = np.diag(1./np.sqrt(   w     ) )
     W2SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w  )) ) )
     W3SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w,w)) ) )
-    weightDict = {'W2':W2, 'W3':W3, 'W2Sqrt':W2Sqrt, 'W3Sqrt':W3Sqrt,\
-            'W2SqrtInv':W2SqrtInv, 'W3SqrtInv':W3SqrtInv }
+    weightDict = {'W1':W1, 'W2':W2, 'W3':W3, \
+            'W1Sqrt':W1Sqrt, 'W2Sqrt':W2Sqrt, 'W3Sqrt':W3Sqrt,\
+            'W1SqrtInv':W1SqrtInv, 'W2SqrtInv':W2SqrtInv, 'W3SqrtInv':W3SqrtInv }
     return weightDict 
 
 
