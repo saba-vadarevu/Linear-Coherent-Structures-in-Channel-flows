@@ -2,6 +2,7 @@ import numpy as np
 import scipy as sp
 from scipy.io import savemat
 from scipy.linalg import sqrtm
+from scipy.sparse.linalg import svds
 import pseudo 
 import glob
 from warnings import warn
@@ -24,35 +25,37 @@ IMPORTANT: Everything here is written only for internal nodes.
 """
 covDataDir = os.environ['DATA']+ 'covN127/'
 class linearize(object):
-    def __init__(self, N=50, U=None,dU=None, d2U=None,flowClass="channel",Re=10000., **kwargs):
+    def __init__(self, N=151, U=None,dU=None, d2U=None,flowClass="channel",Re=2000., **kwargs):
         """
         Initialize OSS class instance. 
         Inputs:
-            N(=50)      :   Number of internal nodes (x2 for BL to cover eta <0)
+            N(=151)      :   Number of internal nodes (x2 for BL to cover eta <0)
             U(=None)    :   Spatiotemporal mean streamwise velocity
             dU(=None)   :   dU/dy
             d2U(=None)  :   d2U/dy2
+            Re (=2000.) :   Reynolds number (friction based whenever U is normalized by friction velocity)
             flowClass(="channel")   : "channel", "couette", or "bl"
+            kwargs['turb'] (=False): If True, initialized with turbulent base flow; Default is laminar.
+                                    Turbulent flow can only be initialized for channel flow currently.
 
         Attributes: 
             N (no. of nodes), y (node location) 
             D1, D2, D4: Differentiation matrices
             w:  Weight matrix for defining integral norms. Use as np.dot(w,someFunctionOn_y)
+            weightDict: Contains W1,W2,W3, etc.. for diagonal weight matrices
             U, dU, d2U, flowClass:  Mean velocity and its derivatives, and flowClass
             __version__ :   Irrelevant to code, keeps track of development.
             Re: Reynolds number. Can be either 
         flowClass determines the operators D1, D2 and D4 to be used, and also U and d2U if not supplied.
-        If U and d2U are not supplied, initialize with laminar velocity profile
+        flowState(="lam");  "lam" or  "turb", according to kwargs['turb']
+        If U and d2U are not supplied, initialize with velocity profile according to flowState
 
         Methods:
             _weightVec, _weightMat: Returns clencurt-weighted versions of 1-d and 2-d arrays, 
                                     so that 2-norm of the weighted versions give energy norm of the original.
             _deweightVec, _deweightMat: Revert weighted versions to original unweighted versions 
-            OS, OSS:    Orr-Sommerfeld and Orr-Sommerfeld-Squire matrix operators 
-                            (coefficient matrix multiplying df/dt is included in the returned matrix)
-            eig, svd:   Calls numpy.linalg's eig and svd routines, with kwarg for weighting.
-            resolvent:  Currently unavailable.
-
+            makeSystem: Returns OSS, input, and output matrices; optionally, adjoints of these matrices.
+            dynamicsMat, inputMat, outputMat: Extract from makeSystem if others aren't needed
             
         """
         N = np.int(N)
@@ -76,7 +79,7 @@ class linearize(object):
             D4 = pseudo.cheb4c(N)       # Imposes clamped BCs
             w = pseudo.clencurt(N)      # Weights matrix
        
-        self.__version__ = '6.2.3'    # m.c, m is month and c is major commit in month
+        self.__version__ = '9.1.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -84,20 +87,27 @@ class linearize(object):
         self.D4 = D4
         self.w  = w
         self.Re = np.float(Re)
-
+        
+        flowState = 'lam'
         if (U is None):
             if flowClass == "channel":
                 U = 1. - self.y**2; dU = -2.*self.y; d2U = -2.*np.ones(U.size)
+                if kwargs.get('turb',False):
+                    turbDict = turbMeanChannel(N=N,Re=Re)
+                    U = turbDict['U']; dU = turbDict['dU']; d2U = turbDict['d2U']
+                    flowState = 'turb'
             elif flowClass == "couette":
                 U = self.y; dU = np.ones(U.size); d2U = np.zeros(U.size)
             elif flowClass == "bl":
                 U,dU = blasius.blasius(self.y)
                 d2U = np.dot( self.D2, (U-1.) )
+                warn("Do not use self.weightDict or makeSystem('eddy'=True) ")
 
             else:
                 print("flowClass isn't any of the 3 accepted ones... Weird. Setting to channel....")
                 flowClass = "channel"
         elif U.size != self.N: 
+            warn("Size of input U doesn't match N. Using values at nodes 1:1+N...")
             U = U[1:1+self.N]
 
         if dU is None: 
@@ -115,10 +125,14 @@ class linearize(object):
         self.dU = dU
         self.d2U = d2U
         self.flowClass = flowClass
+        self.flowState = flowState
+        self.weightDict = pseudo.weightMats(self.N)
 
-        print("Initialized instance of 'linearize', version %s." %(self.__version__),
-                "New in this version: pseudo module is defined for internal nodes ",
-                "To fix: Eddy viscosity, resolvent, and svd are currently not supported.",sep="\n")
+        warn("Initialized instance of 'linearize', version %s." %(self.__version__)+
+                "New in this version: All system matrices are defined in makeSystem('eddy'=False,'adjoint'=False)"+
+                "Eddy viscosity enhancement is allowed, but baseflow is reset to turbulent according to turbMeanChannel()"+
+                "matNorm() defined to compute 2-norm and HS norm directly from unweighted matrices"+
+                "weightDict is added as a class attribute")
 
         return
         
@@ -176,34 +190,37 @@ class linearize(object):
 
         return mat
 
-    def OSS(self, **kwargs):
-        """ Define the Orr-Sommerfeld Squire operator matrix. 
+    def makeSystem(self, **kwargs):
+        """ Define the Orr-Sommerfeld Squire operator matrix, and input and output matrices (B,C)
         Inputs:
-            kwargs: Dictionary containing wavenumbers 
-                        Defaults are (a,b) = (2.5, 20./3.)
+            kwargs: Dictionary containing keys:
+                a, b = (2.5, 20./3.); wavenumbers
+                eddy = False;   If True, eddy viscosity is used (computed in turbMeanChannel, and U,dU,d2U reset accordingly)
+                adjoint=False;  If True, returns adjoint matrices too
+                
         Outputs:
-            OSS matrix
+            systemDict with keys
+                A, B, C: OSS matrix, input matrix, and output matrix
+                Aadj, Badj, Cadj: Adjoints of OSS, input and output matrices. These are only populated if input argument 'adjoint' is True
+
         What this OSS matrix is is given in function comments.
-        Essentially, I define OSS*[vel,vor].T =: i.omega*[vel,vor].T
-            """
+        Essentially, I define OSS*[vel,vor].T =: -i.omega*[vel,vor].T
+        """
         # For consistency, I use 2d numpy arrays instead of numpy matrices
         # Where dot products are needed, use np.dot(A,B) instead of A*B
-        warn("To use eddy viscosity, pass kwarg 'nu'=self.nu to either makeSystem/makeAdjSystem, dynamicsMat, or OSS")
+        warn("To use eddy viscosity, pass kwarg 'eddy'=True; default=False")
+        warn("To produce adjoint matrices, pass kwarg 'adjoint'=True; default=False")
 
 
         a = kwargs.get('a', 2.5)
         b = kwargs.get('b', 20./3.)
         Re= self.Re
-        nu= kwargs.get('nu', np.ones(self.N))   
-        # If total viscosity is not supplied as a keyword argument, use molecular viscosity
-        # Include this term in the formulation as nu/Re, where nu is the ratio of total viscosity to molecular viscosity.
-        # When eddy viscosity is zero, nu is 1
         k2 = a**2 + b**2
         print("a, b, Re:",a,b,Re)
 
         # We build the matrix only for internal nodes, so use N-2
-        I = np.identity(self.N )
-        Z = np.zeros(self.D1.shape )
+        I = np.identity(self.N ); I2 = np.identity(2*self.N); I1 = I
+        Z = np.zeros(self.D1.shape ); Z1 = Z
 
         # All attributes of self ignore walls (in variables and differentiation matrices)
         D1_ = self.D1
@@ -213,6 +230,40 @@ class linearize(object):
         dU_ = np.diag(self.dU)
         d2U_ = np.diag(self.d2U)
         # U and d2U have to be diagonal matrices to multiply other matrices
+
+
+        # Eddy viscosity; use only if kwargs['eddy'] is True
+        if kwargs.get('eddy',False):
+            # The problem I have is that I've set all variables on only the internal nodes,
+            #   and they're all zero at the walls, except the viscosity. 
+            # This isn't computationally efficient, but it's the easiest thing to do;
+            # Compute the eddy viscosity afresh, and reset the velocities to match this.
+            # Get y, nu, and U afresh, including entries at the wall
+            turbDictTmp = turbMeanChannel(N=self.N,Re=self.Re,walls=True)
+            DMwalls = pseudo.chebdif(self.N,2,walls=True)[1]   # diffmats including walls
+
+            # Reset base flow
+            warn('Base velocity is being reset using ops.turbMeanChannel...')
+            self.flowState = 'turb'; self.flowClass = 'channel'
+            self.U  = turbDictTmp['U'][1:-1]
+            self.dU = self.D1 @ self.U
+            self.d2U= self.D2 @ self.U
+
+            # Get viscosity, including walls, and compute derivatives 
+            nu   = turbDictTmp['nu']
+            dnu  = DMwalls[:,:,0] @ nu
+            d2nu = DMwalls[:,:,1] @ nu
+            
+            # Ignore values at the walls
+            nu  = nu[1:-1]
+            dnu = dnu[1:-1]
+            d2nu= d2nu[1:-1]
+        else:
+            nu = np.ones(self.N)
+            dnu = np.zeros(self.N)
+            d2nu= np.zeros(self.N)
+            
+
      
         # The linearized equation looks like this (from Schmid & Henningson, 2001)
         # -i.omega  [vel]  =  [DeltaInv* LOS ,  Z  ] [vel]  
@@ -223,23 +274,50 @@ class linearize(object):
         # However, when eddy viscosity is included, these change to
         #       LOS =   i.a.d2U - i.a.U.(D2-k^2 I) + 1/Re*{ nu*(D2 - k^2 I)^2 + 2 nu' (D3 - k^2 D) + nu'' (D2 + k^2 I) }
         #       LSQ =   - i.a.U + 1/Re { nu (D2-k^2 I)  + nu' D}
-        nu_ = np.diag(nu)
-        warn("dnu and d2nu are currently set to zero. Revisit this to implement eddy viscosity.")
-        dnu_ = np.zeros(D1_.shape)
-        d2nu_ = np.zeros(D1_.shape)
+        nuMat = np.diag(nu)
+        dnuMat = np.diag(dnu)
+        d2nuMat = np.diag(d2nu)
 
-        LOS  = 1.j*a* d2U_ - 1.j*a *( U_ @ ( D2_ - k2 *I ) )   \
-                +(1./Re) *(  nu_ @ (k2*k2*I - 2.*k2*D2_ + D4_ ) + 2.* dnu_ @ D1_ @ ( D2_ - k2 *I)
-                            + d2nu_ @ (D2_ + k2 * I)    )
-        DeltaMat = D2_ - k2*I        
-        DeltaInv = np.linalg.solve(DeltaMat, I) 
+        # Laplacian and its inverse 
+        Delta = D2_ - k2*I        
+        DeltaInv = np.linalg.solve(Delta, I) 
+        DeltaSq = (k2*k2*I - 2.*k2*D2_ + D4_ )
+        D1 = D1_; D2 = D2_
 
-        LSQ  = - 1.j*a*U_  + (1./Re)*( nu_ @  (D2_ -k2*I ) + dnu_ @ D1_ ) 
+        # Blocks of the OSS matrix
+        LOS  = 1.j*a* d2U_ - 1.j*a *( U_ @ Delta ) + \
+                (1./Re) *(  nuMat@ DeltaSq + 2.* dnuMat @ Delta @ D1_ + d2nuMat @ (D2_ + k2 * I  )    )
+        LSQ  = - 1.j*a*U_  + (1./Re)*( nuMat @  Delta + dnuMat @ D1_ ) 
+        Lco  = -1.j*b*dU_
 
-        OSS =  np.vstack(( np.hstack( (DeltaInv @ LOS, Z   ) ),\
-                           np.hstack( (-1.j*b*dU_    ,  LSQ) ) ))
+        
+        A =  np.vstack(( np.hstack( (DeltaInv @ LOS, Z   ) ),\
+                           np.hstack( (Lco           ,  LSQ) ) ))
+        
+        B = np.vstack((
+                        DeltaInv@ np.hstack(( -1.j*a*D1, -k2*I1, -1.j*b*D1 )),
+                        np.hstack((1.j*b*I1, Z1, -1.j*a*I1))            ))
+        
+        C = (1./k2) * np.vstack((
+                        np.hstack((1.j*a*D1, -1.j*b*I1)),
+                        np.hstack((k2 * I1 , Z1       )),
+                        np.hstack((1.j*b*D1,  1.j*a*I1)) ))
+        systemDict = {'A':A, 'B':B, 'C':C}
+        if kwargs.get('adjoint',False):
+            LOSadj = 1.j*a*U_ @ Delta + 2.j*a*dU_ @ D1_ + \
+                        (1./Re)*( nuMat @ DeltaSq + 2.*dnuMat @ Delta @ D1_ + d2nuMat@ ( D2_+k2*I) )
+            LSQadj = 1.j*a*U_ + (1./Re)*( nuMat @ Delta + dnuMat @ D1_ ) 
+            Lcoadj = 1.j*b*dU_
 
-        return OSS
+            Aadj = np.vstack((
+                                np.hstack((  DeltaInv @ LOSadj , Lcoadj )),
+                                np.hstack((  Z1                , LSQadj ))    ))
+            Badj = C.copy()
+            Cadj = B.copy()
+
+            systemDict.update({'Aadj':Aadj, 'Badj':Badj, 'Cadj':Cadj})
+
+        return systemDict 
 
 
 
@@ -248,7 +326,7 @@ class linearize(object):
             [v_t, eta_t] = A [v,eta].
             This dynamics matrix A is the same as the OSS matrix
         """
-        return self.OSS(**kwargs)
+        return self.makeSystem(**kwargs)['A']
 
 
     def velVor2primitivesMat(self,**kwargs):
@@ -257,87 +335,46 @@ class linearize(object):
             dict with wavenumbers (a,b) = (1,0) 
         Output:
             3N x 2N matrix convertMat """
-
-        a = kwargs.get('a', 2.5 )
-        b = kwargs.get('b', 20./3.)
-        
-        Z = np.zeros((self.N, self.N), dtype=np.complex)
-        I = np.identity(self.N, dtype=np.complex)
-
-        convertMat = np.vstack((
-            np.hstack(( 1.j*a*self.D, -1.j*b*I )),
-            np.hstack(( (a**2+b**2)*I,    Z    )),
-            np.hstack(( 1.j*b*self.D,  1.j*a*I )) ))
-
-        convertMat = convertMat/(a**2 + b**2)
-
-        return convertMat
+        return self.makeSystem(**kwargs)['C']
 
     def outputMat(self,**kwargs):
         return self.velVor2primitivesMat(**kwargs)
 
-    def primitives2velVorMat(self, custom=False, **kwargs):
+    def primitives2velVorMat(self, **kwargs):
         """ Defines a matrix convertMat: [v,eta]^T = convertMat @ [u,v,w]^T.
         Input: 
             dict with wavenumbers (a,b) = (2.5,20./3.) 
         Output:
             3N x 2N matrix convertMat """
+        return self.makeSystem(**kwargs)['B']
 
-        a = kwargs.get('a', 2.5 )
-        b = kwargs.get('b', 20./3.)
-        
-        Z = np.zeros((self.N, self.N), dtype=np.complex)
-        I = np.identity(self.N, dtype=np.complex)
-        
-        if custom:
-            # This is a simpler conversion matrix that I built
-            
-            convertMat = np.vstack((
-                np.hstack(( Z      , I,   Z      )),
-                np.hstack(( 1.j*b*I, Z, -1.j*a*I )) ))
-            coeffMat = np.identity(convertMat.shape[0])
-        else:
-            # This is the one from Jovanovic and Bamieh (2005)
-            Delta = self.D2 - (a**2 + b**2) * I
-            DeltaInv = np.linalg.solve(Delta, I)
-            coeffMat = np.vstack(( 
-                        np.hstack(( DeltaInv, Z )),
-                        np.hstack(( Z,        I ))  ))
+    def matNorm(self, someMat,ord=2):
+        """ Returns the H_infty norm (largest singular value) or Frobenius norm for 'someMat'
+        The weighting of the matrix is done within the routine, so supply unweighted matrices 
+        Inputs:
+                someMat: Unweighted matrix to be normed
+                ord =2:  Largest singular value for ord=2 or '2', and Frobenius norm for ord='HS' or 'fro' or 'Fro' """
+        assert someMat.ndim ==2
+        if someMat.shape[0] == self.N: W0 = self.weightDict['W1Sqrt']
+        elif someMat.shape[0] == 2*self.N: W0 = self.weightDict['W2Sqrt']
+        elif someMat.shape[0] == 3*self.N: W0 = self.weightDict['W3Sqrt']
+        else: raise RuntimeError("Each dimension of the input matrix must be an integer multiple of self.N")
+        if someMat.shape[1] == self.N: W1 = self.weightDict['W1SqrtInv']
+        elif someMat.shape[1] == 2*self.N: W1 = self.weightDict['W2SqrtInv']
+        elif someMat.shape[1] == 3*self.N: W1 = self.weightDict['W3SqrtInv']
+        else: raise RuntimeError("Each dimension of the input matrix must be an integer multiple of self.N")
 
-            convertMat = np.vstack((
-                np.hstack(( -1.j*a*self.D1, -(a**2+b**2)*I, -1.j*b*self.D1 )),
-                np.hstack(( 1.j*b*I       , Z             , -1.j*a*I       )) ))
+        H = W0 @ someMat @ W1
+        if (ord == 2) or (ord == '2'):
+            matrixNorm = svds(H,k=2)[1][0]
+        elif (ord == 'HS') or (ord == 'fro') or (ord == 'Fro'):
+            matrixNorm = np.linalg.norm(H, ord='fro')
+        else: 
+            matrixNorm = svds(H,k=2)[1][0]
+            warn("Input argument 'ord' is not recognized. Returning largest singular value")
 
-        return coeffMat @ convertMat
-
-        
-
-    def resolvent(self,**kwargs):
-        pass
+        return matrixNorm
     
-    def eig(self, mat, b=None, weighted=True, **kwargs):
-
-        if weighted:
-            mat = self._weightMat(mat)
-
-        if b is None:
-            evals, evecs = sp.linalg.eig(mat)
-            b = np.identity(mat.shape[0])
-        else:
-            if weighted:
-                b = self._weightMat(b)
-            evals, evecs = sp.linalg.eig(mat, b=b)
-
-        eignorm = np.linalg.norm(  np.dot(mat, evecs) - np.dot(np.dot(b,evecs),  np.diag(evals)) )
-        print("Eigenvalue solution returned with error norm:",eignorm)
-        if weighted:
-            evecs = self._deweightVec(evecs)
-
-        return evals, evecs
-        
-
-    def svd(self, mat, weighted=True): 
-        pass
 
    
 
@@ -376,6 +413,8 @@ class statComp(linearize):
             # If U and its derivatives are not supplied, use curve-fit from ops.turbMeanChannel()
             outDict = turbMeanChannel(Re=Re,**kwargs)
             kwargs.update(outDict)
+
+        warn("DO NOT USE THIS CLASS (STATCOMP). Use linearize instead.") 
 
         super().__init__(**kwargs)  # Initialize linearize subinstance using supplied kwargs
         self.a = a
@@ -424,7 +463,7 @@ class statComp(linearize):
 
         return
 
-    def makeSystem(self,weight=True,**kwargs):
+    def makeTransformedSystem(self,weight=True,**kwargs):
         """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v
         Inputs:
             None 
@@ -480,8 +519,8 @@ class statComp(linearize):
     def outputMat(self,**kwargs):
         return linearize.outputMat(self, a=self.a, b=self.b, **kwargs)
     
-    def makeSystemNew(self,weight=True,**kwargs):
-        """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v, based on JB05 instead of my own definitions.
+    def makeTransformedSystem(self,weight=True,**kwargs):
+        """ Returns the dynamics matrix A_psi describing evolution of psi, and output matrix C_psi relating psi to v, based on JB05.
         Inputs:
             None 
         Outputs:
@@ -499,7 +538,7 @@ class statComp(linearize):
         I2 = np.identity(2*N, dtype=np.complex)
         I3 = np.identity(3*N, dtype=np.complex)
 
-        weightDict = pseudo.weightMats(N=N)
+        weightDict = self.weightDict
         W2  = weightDict['W2']
         W3  = weightDict['W3']
         W2s = weightDict['W2Sqrt']
@@ -837,6 +876,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
         N (=191):   Number of internal Chebyshev nodes 
                         (coz my ReTau=186 simulation has 192 internal cells = 193 edges including the walls)
         Re (=186):  Friction Reynolds number
+        walls (=False): If True, all returned entries are built to include the wall-nodes
     Outputs:
         Dictionary containing
             U
@@ -853,6 +893,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
     # However, if alfa and kapa are supplied as keyword arguments, use them instead
     alfa = kwargs.get('alfa', alfa)
     kapa = kwargs.get('kapa', kapa)
+    kwargs['walls'] = kwargs.get('walls',False)
     print("Using parameters Re=%.4g, alfa=%.4g, kapa=%.4g, N=%d"%(Re,alfa,kapa,N))
 
     nuT = lambda zt: -0.5 + 0.5*np.sqrt( 1.+
@@ -860,18 +901,19 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
                              (1. - np.exp( (np.abs(zt-1.)-1.)*Re/alfa )   )    )**2)
 
     intFun = lambda xi: Re * (1.-xi)/(1. + nuT(xi)) 
-    zArr,DM = pseudo.chebdif(N,2)
+    zArr,DM = pseudo.chebdif(N,2,walls=kwargs['walls'])
     D1 = DM[:,:,0]    # Same for diff mats - only internal nodes
     D2 = DM[:,:,1]
 
     # I use z \in {-1,1}, but the nuT based integral equation for U is designed to work for
     #   z \in {0,2}. So....
-    zArr= 1.+zArr   # Doesn't matter if the mapping is 1-z or 1+z, coz U is symmetric about the centerline
+    zArr= 1.-zArr   # Doesn't matter if the mapping is 1-z or 1+z, coz U is symmetric about the centerline
 
     U = np.zeros(zArr.size)
+    U[0] = quad( intFun, 0., zArr[0])[0]
 
-    for ind in range(zArr.size):
-        U[ind] = quad( intFun, 0., zArr[ind])[0]
+    for ind in range(1,zArr.size):
+        U[ind] = U[ind-1] + quad( intFun, zArr[ind-1], zArr[ind])[0]
 
     dU = D1 @ U
     d2U = D2 @ U
