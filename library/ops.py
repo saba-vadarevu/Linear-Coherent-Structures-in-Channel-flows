@@ -79,7 +79,7 @@ class linearize(object):
             D4 = pseudo.cheb4c(N)       # Imposes clamped BCs
             w = pseudo.clencurt(N)      # Weights matrix
        
-        self.__version__ = '9.1.1'    # m.c, m is month and c is major commit in month
+        self.__version__ = '10.1.1'    # m.c, m is month and c is major commit in month
         self.N  = N
         self.y  = y
         self.D1 = D1; self.D = D1
@@ -216,7 +216,7 @@ class linearize(object):
         b = kwargs.get('b', 20./3.)
         Re= self.Re
         k2 = a**2 + b**2
-        print("a, b, Re:",a,b,Re)
+        #print("a, b, Re:",a,b,Re)
 
         # We build the matrix only for internal nodes, so use N-2
         I = np.identity(self.N ); I2 = np.identity(2*self.N); I1 = I
@@ -302,18 +302,57 @@ class linearize(object):
                         np.hstack((1.j*a*D1, -1.j*b*I1)),
                         np.hstack((k2 * I1 , Z1       )),
                         np.hstack((1.j*b*D1,  1.j*a*I1)) ))
-        systemDict = {'A':A, 'B':B, 'C':C}
+        systemDict = {'A':A, 'B':B, 'C':C, 'DeltaInv':DeltaInv}
+        # Just coz I don't like having to do inversions too many times
         if kwargs.get('adjoint',False):
-            LOSadj = 1.j*a*U_ @ Delta + 2.j*a*dU_ @ D1_ + \
-                        (1./Re)*( nuMat @ DeltaSq + 2.*dnuMat @ Delta @ D1_ + d2nuMat@ ( D2_+k2*I) )
-            LSQadj = 1.j*a*U_ + (1./Re)*( nuMat @ Delta + dnuMat @ D1_ ) 
-            Lcoadj = 1.j*b*dU_
+            if kwargs.get('eddy',False):
+                if False:
+                    # There's some discrepancy between Hwang's and Jovanovic's formulation
+                    # Until I get to working on this bit, I'll use separate routines for the adjoints
+                    LOSadj = 1.j*a*U_ @ Delta - 1.j*a*d2U_ + \
+                            (1./Re)* (nuMat @ DeltaSq + 2.*dnuMat @ Delta @ D1 + d2nuMat @ (D2 + k2*I1) )
+                    LSQadj = 1.j*a*U_ + (1./Re)*( nuMat @ Delta + dnuMat @ D1)
+                    Lcoadj = 1.j*b*dU_
 
-            Aadj = np.vstack((
-                                np.hstack((  DeltaInv @ LOSadj , Lcoadj )),
-                                np.hstack((  Z1                , LSQadj ))    ))
-            Badj = C.copy()
-            Cadj = B.copy()
+                    Aadj  = np.vstack((
+                                        np.hstack(( DeltaInv @ LOSadj , Lcoadj )) , 
+                                        np.hstack((       Z1          , LSQadj ))  ))
+                    Badj = np.vstack(( 
+                                        np.hstack(( -1.j*a*D1 @ DeltaInv,  -1.j*b*I1 )), 
+                                        np.hstack(( -1.j*k2* DeltaInv   ,  Z1  )),
+                                        np.hstack(( -1.j*b*D1 @ DeltaInv,  1.j *a*I1 ))   ))
+                    Cadj = 1./k2 * np.vstack(( 
+                                        np.hstack(( 1.j*a*D1,  k2*I1,  1.j*b*D1 )),
+                                        np.hstack(( 1.j*b*I1,  Z1   ,  -1.j*a*I1))  ))
+                elif False:
+                    Badj = (1./k2) * np.vstack(( 
+                                        np.hstack(( -1.j*a*D1  ,  -1.j*b*I1 )), 
+                                        np.hstack(( k2 * I1    ,  Z1        )),
+                                        np.hstack(( -1.j*b*D1  ,  1.j* a*I1 ))   ))
+                    Cadj = (1./k2**2) * np.vstack(( 
+                                        np.hstack(( 1.j*a*DeltaInv@D1, -k2*DeltaInv, 1.j*b*DeltaInv@D1 )),
+                                        np.hstack(( 1.j*b*I1         , Z1          , -1.j*a*I1  ))   ))
+                else:
+                    # For now, just go with adjoints being complex conjugates
+                    # This bit really needs fixing though
+                    # Will get back to this later 
+                    Aadj = A.conj().T
+                    Badj = B.conj().T
+                    Cadj = C.conj().T
+
+            else:
+                LOSadj = 1.j*a*U_  - 1.j*a* DeltaInv @ d2U_  + (1./Re)* DeltaInv  @ DeltaSq 
+                LSQadj = 1.j*a*U_ + (1./Re)* Delta  
+                Lcoadj = -1.j*b* DeltaInv @ dU_
+
+                Aadj = np.vstack((
+                                    np.hstack((  LOSadj , Lcoadj )),
+                                    np.hstack((  Z1     , LSQadj ))    ))
+                # Is this right? From definitions of JB05, doesn't look like it should be
+                # But this is how he defines them.. So.. Check if this also follows from 
+                #   the assumption of D^2 being Hermitian... 
+                Badj = C.copy()
+                Cadj = B.copy()
 
             systemDict.update({'Aadj':Aadj, 'Badj':Badj, 'Cadj':Cadj})
 
