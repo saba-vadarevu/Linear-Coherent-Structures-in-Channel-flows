@@ -23,7 +23,7 @@ import numpy as np
 import scipy as sp
 #from scipy.linalg import norm
 from warnings import warn
-from pseudo import chebdif, clencurt, chebintegrate, chebint, chebdot, chebnorm
+from pseudo import chebdif, clencurt, chebint, chebdot, chebnorm
 
 #from pseudo.py import chebint
 
