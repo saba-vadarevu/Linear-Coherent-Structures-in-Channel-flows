@@ -306,7 +306,7 @@ def chebcoll_vec(a,truncated=True):
 
 
 
-def chebint(fk, x):
+def chebint(fk, x, walls=False):
     """ interp = chebint(fk,x): Interpolate function 'fk' from internal Chebyshev nodes to 'x'
     Inputs:
         fk: Function values on 'Nint' internal Chebyshev nodes, Nint = fk.size
@@ -315,7 +315,8 @@ def chebint(fk, x):
         interp: Function values on x
     """
     assert fk.ndim == 1
-    fk = np.concatenate(( [0.], fk, [0.] ))
+    if not walls:
+        fk = np.concatenate(( [0.], fk, [0.] ))
     speps = np.finfo(float).eps # this is the machine epsilon
     N = np.size(fk)
     M = np.size(x)
@@ -525,7 +526,7 @@ def weightMats(N, walls=False):
     W1SqrtInv   = np.diag(1./np.sqrt(   w     ) )
     W2SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w  )) ) )
     W3SqrtInv   = np.diag(1./np.sqrt(   np.concatenate((w,w,w)) ) )
-    weightDict = {'W1':W1, 'W2':W2, 'W3':W3, \
+    weightDict = {'w':w, 'W1':W1, 'W2':W2, 'W3':W3, \
             'W1Sqrt':W1Sqrt, 'W2Sqrt':W2Sqrt, 'W3Sqrt':W3Sqrt,\
             'W1SqrtInv':W1SqrtInv, 'W2SqrtInv':W2SqrtInv, 'W3SqrtInv':W3SqrtInv }
     return weightDict 
