@@ -55,7 +55,7 @@ def getDefaultDict():
     return defaultDict.copy()
 
 
-def impulseResponse(aArr, bArr,N, t, flowDict=defaultDict, impulseArgs=None):
+def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, fPrefix=None):
     """
     Generate flowField over set of Fourier modes as response to impulse
     Inputs:
@@ -75,22 +75,34 @@ def impulseResponse(aArr, bArr,N, t, flowDict=defaultDict, impulseArgs=None):
 
     """
     assert (aArr >= 0).all() and (bArr >= 0).all()
-    assert t > 0.
+    tArr = np.array([tArr]).flatten()
+    assert (tArr > 0.).all()
     warn("Need to write some check for wall-normal grid independence")
+
+    if (fPrefix is None):
+        tArr = np.array([tArr[0]]).flatten()
+        print("No save name is specified. Can return flowFields at just the first 't', so not computing later times.")
+        print("Specify kwarg 'fPrefix' to allow computation at multiple times")
+
     Re = flowDict.get('Re',2000.)
     if flowDict.get('flowState','turb') == 'turb':
         turb = True
     else: turb = False
     eddy = flowDict.get('eddy',False)
-    print("Computing impulse response at t, aArr, bArr:",t,aArr, bArr)
+    print("Computing impulse response at tArr, aArr, bArr:",tArr,aArr, bArr)
     print("Flow parameters are (Re,N,eddy,turb):",(Re,N,eddy,turb))
     linInst = ops.linearize(N=N, flowClass='channel',Re=Re,eddy=eddy,turb=turb)
 
-    # Create a flowField instance 
-    flowDict.update({'t':t})
-    ffx = flowField(aArr, bArr,N, flowDict=flowDict)
-    ffy = ffx.copy(); ffz = ffx.copy()
-    tArr = np.array([t])
+    # Create flowField instances for each t in tArr, one each for response to x, y, and z impulse
+    FxList = []; FyList = []; FzList = []
+    for t in tArr:
+        flowDict.update({'t':t})
+        ffx = flowField(aArr, bArr,N, flowDict=flowDict)
+        ffy = ffx.copy(); ffz = ffx.copy()
+        FxList.append(ffx)
+        FyList.append(ffy)
+        FzList.append(ffz)
+
     for i0 in range(aArr.size):
         a = aArr[i0]
         print("a:",a)
@@ -98,15 +110,49 @@ def impulseResponse(aArr, bArr,N, t, flowDict=defaultDict, impulseArgs=None):
             b = bArr[i1]
             responseDict = impres.timeMap(a,b,tArr=tArr,linInst=linInst,
                     eddy=eddy,impulseArgs=impulseArgs)
-            ffx[i0,i1] = responseDict['coeffArr'][0,0].reshape((3,N))
-            ffy[i0,i1] = responseDict['coeffArr'][0,1].reshape((3,N))
-            ffz[i0,i1] = responseDict['coeffArr'][0,2].reshape((3,N))
             
+            for tInd in range(tArr.size):
+                ff = FxList[tInd]
+                ff[i0,i1] = responseDict['coeffArr'][tInd,0].reshape((3,N))
+                ff = FyList[tInd]
+                ff[i0,i1] = responseDict['coeffArr'][tInd,1].reshape((3,N))
+                ff = FzList[tInd]
+                ff[i0,i1] = responseDict['coeffArr'][tInd,2].reshape((3,N))
     
-    return {'FxResponse':ffx, 'FyResponse':ffy,'FzResponse':ffz}
+    # Save each ff instance if fPrefix is supplied;
+    #   Append _Fx_txxxx.mat to the prefix
+    if fPrefix is not None:
+        fPrefix = fPrefix.split('.')[0]    # Get rid of format suffix, if supplied
+        for tInd in range(tArr.size):
+            t = tArr[tInd]
+            ff = FxList[tInd] 
+            ff.saveff(fPrefix+"_Fx_t%04d"%(10.*t))
+            ff = FyList[tInd] 
+            ff.saveff(fPrefix+"_Fy_t%04d"%(10.*t))
+            ff = FzList[tInd] 
+            ff.saveff(fPrefix+"_Fz_t%04d"%(10.*t))
+    
+    return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[1]}
 
+def loadff(fName):
+    if not fName.endswith('.mat'):
+        fNamePrefix = fName.split('.')[0]
+        fName = fNamePrefix +'.mat'
 
+    loadDict =  loadmat(fName)
+    keyList=['Re', 'flowClass', 'flowState', 'eddy', 't']
+    flowDict = {}
+    for key in keyList: flowDict[key] = loadDict[key]
 
+    aArr = loadDict['aArr']; bArr = loadDict['bArr']; N = loadDict['N']
+
+    ff = flowField(aArr, bArr, N, flowDict=flowDict)
+    ff[:] = loadDict['ffArr']
+
+    print("Loaded flowField from ",fName)
+
+    return ff
+    
 
 
 class flowField(np.ndarray):
@@ -211,6 +257,19 @@ class flowField(np.ndarray):
         self.dU = getattr(self,'dU',obj.dU)
         self.d2U = getattr(self,'d2U',obj.d2U)
         self.weightDict = getattr(self,'weightDict',obj.weightDict)
+        return
+
+    def saveff(self, fName):
+        """ Save flowField instance to .mat file"""
+        if not fName.endswith('.mat'):
+            fNamePrefix = fName.split('.')[0]
+            fName = fNamePrefix +'.mat'
+        saveDict = {'aArr':self.aArr, 'bArr':self.bArr, 'N':self.N, 'U':self.U, 'ffArr':self.copyArray()}
+        saveDict.update(self.flowDict)
+
+        savemat(fName, saveDict)
+        print("Saved flowField data to ",fName)
+
         return
 
     
@@ -548,7 +607,7 @@ class flowField(np.ndarray):
                 velGrad[:,2,2] = _spec2phys(x,z,wz,symm='even')
 
                 if uField:
-                    uPhys[i0,i1] = self.U + _spec2phys(x,z,uSpec,symm='even')
+                    uPhys[i0,i1] = _spec2phys(x,z,uSpec,symm='even')
                 if vorzField:
                     vorzPhys[i0,i1] = -self.dU + _spec2phys(x,z,vorzSpec, symm='even')
 
@@ -602,253 +661,6 @@ class flowField(np.ndarray):
         
         return returnList
 
-                    
-
-
-
-
-
-
-        
-
-#====================================================================================
-#====================================================================================
-#====================================================================================
-#====================================================================================
-#====================================================================================
-#====================================================================================
-#====================================================================================
-    def getPhysical(self,tLoc = 0., xLoc=0., zLoc= 0., yLoc = None):
-        """Returns the flow field at specified locations in t,x,z,y
-        Arguments: tLoc (default=0.), xLoc (default=0.), zLoc (default=0.)
-                    yLoc (default:None, corresponds to Chebyshev nodes on [1,-1] of cardinality self.N)
-                    if yLoc is specified, it must be either 
-        NOTE: yLoc here is referenced from the local wall locations. The walls are ALWAYS at +/-1, including for wavy walls"""
-        tLoc = np.asarray(tLoc); xLoc = np.asarray(xLoc); zLoc = np.asarray(zLoc)
-        # If, say, tLoc was initially a float, the above line converts it into a 0-d numpy array
-        # I can't call tLoc as tLoc[0], since 0-d arrays can't be indexed. So, convert them to 1-d:
-        tLoc = tLoc.reshape(tLoc.size); xLoc = xLoc.reshape(xLoc.size); zLoc = zLoc.reshape(zLoc.size)
-        
-        
-        # Ensure that Fourier modes for the full x-z plane are available, not just the half-plane (m>=0)
-        M = self.flowDict['M']
-            
-        if yLoc is None:
-            field = np.zeros((tLoc.size, xLoc.size, zLoc.size, self.nd, self.N))
-            for tn in range(tLoc.size):
-                for xn in range(xLoc.size):
-                    for zn in range(zLoc.size):
-                        field[tn,xn,zn] = self.ifft(tLoc=tLoc[tn], xLoc=xLoc[xn], zLoc=zLoc[zn])
-            yLoc = chebdif(self.N,1)[0]
-        else:
-            yLoc = np.asarray(yLoc).reshape(yLoc.size)
-            assert not any(np.abs(yLoc)-1.>1.0e-7), 'yLoc must only have points in [-1,1]'
-            field = np.zeros((tLoc.size, xLoc.size, zLoc.size, self.nd, yLoc.size))
-            for tn in range(tLoc.size):
-                for xn in range(xLoc.size):
-                    for zn in range(zLoc.size):
-                        fieldTemp = self.ifft(tLoc=tLoc[tn], xLoc=xLoc[xn], zLoc=zLoc[zn])
-                        for scal in range(self.nd):
-                            field[tn,xn,zn,scal] = chebint(fieldTemp[scal], yLoc)
-
-        return field
-            
-    
-    def printPhysical(self,xLoc=None, zLoc=None, tLoc=None, yLoc=None,yOff=0.,pField=None, interY=2,fName='ff'):
-        """Prints the velocities and pressure in a .dat file with columns ordered as Y,Z,X,U,V,W,P
-        Arguments (all keyword):
-            xLoc: x locations where field variables need to be computed 
-                    (default: [0:2*pi/alpha] 40 points in x when alpha != 0., and just 1 (even when xLoc supplied) when alpha == 0.)
-            zLoc: z locations where field variables need to be computed 
-                    (default: [0:2*pi/beta] 20 points in z when beta != 0., and just 1 (z=0) when beta == 0.)
-            tLoc: temporal locations (default: 7 points when omega != 0, 1 when omega = 0). Fields at different time-locations are printed to different files
-            pField: Pressure field (computed with divFree=False, nonLinear=True if pField not supplied)
-            interY: Field data is interpolated onto interY*self.N points before printing. Default for interY is 2
-            yOff: Use this to define wavy surfaces. For flat walls, yOff = 0. For wavy surfaces, yOff = 2*eps
-                    yOff is used to modify y-grid as   y[tn,xn,zn] += yOff*cos(alpha*x + beta*z - omega*t)
-            yLoc: Use this to specify a y-grid. When no grid is specified, Chebyshev nodes are used
-            fname: Name of .dat file to be printed to. Default: ff.dat
-        """
-        a = self.flowDict['alpha']; b = self.flowDict['beta']; omega = self.flowDict['omega']
-        K = self.flowDict['K']; L = self.flowDict['L']; M=-np.abs(self.flowDict['M'])
-        if (a==0.): 
-            return self.printPhysicalPlanar(etaLoc=zLoc, tLoc=tLoc, yLoc=yLoc,yOff=yOff,pField=pField, interY=interY,toFile=toFile,fName=fName)
-        if (b==0.): 
-            return self.printPhysicalPlanar(etaLoc=xLoc, tLoc=tLoc, yLoc=yLoc,yOff=yOff,pField=pField, interY=interY,toFile=toFile,fName=fName)
-        if xLoc is None:
-            xLoc = np.arange(0., 2.*np.pi/a, 2.*np.pi/a/40.)
-        if zLoc is None:
-            zLoc = np.arange(0., 2.*np.pi/b, 2.*np.pi/b/20.)
-        if tLoc is None:
-            if omega != 0.: tLoc = np.arange(0,2.*np.pi/omega, 2.*np.pi/b/7.)
-            else: tLoc = np.zeros(1)
-        if yLoc is None:
-            yLoc = chebdif(interY*self.N,1)[0]
-            yLocFlag = False
-        else:
-            yLocFlag = True
-            assert isinstance(yLoc,np.ndarray) and (yLoc.ndim == 1), 'yLoc must be a 1D numpy array'
-            assert not any(np.abs(yLoc) > 1), 'yLoc must only have points in [-1,1]' 
-            
-        assert (type(yOff) is np.float) or (type(yOff) is np.float64), 'yOff characterizes surface deformation and must be of type float'
-        if '.dat' in fName[-4:]: fName = fName[:-4]
-        
-        assert self.nd == 3, 'makePhysical() is currently written to handle only 3C velocity fields'
-        assert isinstance(xLoc,np.ndarray) and isinstance(zLoc,np.ndarray) and isinstance(tLoc,np.ndarray),\
-            'xLoc, zLoc, and tLoc must be numpy arrays'
-        assert isinstance(fName,str), 'fName must be a string'
-        
-        if pField is None: pField = self.solvePressure(divFree=False,nonLinear=True)[0]
-        else:
-            assert pField.size == self.size//3, 'pField must be the same size of each component of self'
-        
-        obj = self.appendField(pField)        
-        
-        if interY != 1 and not yLocFlag:
-            obj = obj.slice(N=yLoc.size)
-        
-        
-        dataArr = np.zeros((7,tLoc.size,xLoc.size,zLoc.size,yLoc.size))
-        
-        # Calculating flow field variables at specified t,x,z,y (refer to .ifft() and .getField())
-        if not yLocFlag: fields = obj.getPhysical(tLoc=tLoc, xLoc=xLoc, zLoc=zLoc)
-        else:  fields = obj.getPhysical(tLoc=tLoc, zLoc=zLoc, xLoc=xLoc, yLoc=yLoc)
-        
-        # Writing grid point locations:
-        #    In output file, columns are ordered as y,z,x, with fields at different time instances in different files
-        tLoc = tLoc.reshape(tLoc.size,1,1,1)   # Numpy broadcasting rules repeat entries when size along an axis is 1
-        xLoc = xLoc.reshape(1,xLoc.size,1,1)
-        zLoc = zLoc.reshape(1,1,zLoc.size,1)
-        yLoc = yLoc.reshape(1,1,1,yLoc.size)
-        
-        dataArr[0] = yLoc + yOff*np.cos(a*xLoc+b*zLoc-omega*tLoc)
-        dataArr[1] = zLoc; dataArr[2] = xLoc 
-        
-        for scal in range(4):
-                dataArr[3+scal] = fields[:,:,:,scal]
-            
-        variables = 'VARIABLES = "Y", "Z", "X", "U", "V", "W", "P"\n'
-        zone = 'ZONE T="", I='+str(yLoc.size)+', J='+str(zLoc.size)+', K='+str(xLoc.size)+', DATAPACKING=POINT'
-        if tLoc.size == 1:
-            #np.savetxt(fName+'.csv', dataArr.reshape((7,dataArr.size//7)).T,delimiter=',')
-            #tempArr = dataArr.reshape(dataArr.size)
-            title = 'TITLE= "Flow in wavy walled channel with a='+str(a)+', b='+str(b)+\
-                ',Re_{\tau}='+str(self.flowDict['Re'])+'"\n'
-            hdr = title+variables+zone
-            np.savetxt(fName+'.dat',dataArr.reshape(7,dataArr.size//7).T, header=hdr,comments='')
-            print('Printed physical field to file %s.dat'%fName)
-        else:
-            for tn in range(tLoc.size):
-                title = 'TITLE= "Flow in wavy walled channel at t='+str(tLoc[tn,0,0,0])+' with a='+str(a)+', b='+str(b)+\
-                    ',Re_{\tau}='+str(self.flowDict['Re'])+'"\n'
-                hdr = title+variables+zone
-                np.savetxt(fName+str(tn)+'.dat', dataArr[:,tn].reshape((7,dataArr[:,tn].size//7)).T,header=hdr,comments='')
-            print('Printed %d time-resolved physical fields to files %sX.dat'%(tLoc.size,fName))
-        return
-    
-    def printPhysicalPlanar(self,nLoc=40,etaLoc=None, tLoc=None, yLoc=None,yOff=0.,pField=None, interY=2,fName='ffPlanar'):
-        """Prints flowField on the plane beta*x - alpha*z = 0 (this plane has normal (beta,-alpha)),
-                in coordinate eta := alpha*x + beta*z
-        nLoc: Number of wall-parallel locations (uniform grid is defined along the vector (alpha,beta) 
-            starting at a*x+b*z = 0 and ending at a*x+b*z = 2*pi
-        Refer to printPhysical() method's doc-string for description of all other input arguments
-        """
-        assert (type(nLoc) is int), 'nLoc must be int'
-        a = self.flowDict['alpha']; b = self.flowDict['beta']; omega = self.flowDict['omega']
-        gama = np.sqrt(a*a+b*b)
-        K = self.flowDict['K']; L = self.flowDict['L']; M=-np.abs(self.flowDict['M'])
-        N = np.int(self.N*interY)
-        if etaLoc is None:  etaLoc = np.arange(0., 4.*np.pi/gama, 2.*np.pi/gama/nLoc)
-        else: 
-            assert isinstance(etaLoc,np.ndarray), 'etaLoc must be a numpy array'
-            etaLoc = etaLoc.reshape(etaLoc.size)
-        if (a == 0.) and (b == 0.):
-            warn('Both alpha and beta are zero for the flowField. Printing a field at (x,z)=(0,0)')
-            nLoc=1; etaLoc = np.zeros(1)
-        
-        if tLoc is None:
-            if omega != 0.: tLoc = np.arange(0,2.*np.pi/omega, 2.*np.pi/b/7.)
-            else: tLoc = np.zeros(1)
-        if yLoc is None:
-            yLoc = chebdif(interY*N,1)[0]
-            yLocFlag = False
-        else:
-            yLocFlag = True
-            assert isinstance(yLoc,np.ndarray) and (yLoc.ndim == 1), 'yLoc must be a 1D numpy array'
-            
-        assert type(yOff) is np.float or (type(yOff) is np.float64), 'yOff characterizes surface deformation and must be of type float'
-        assert isinstance(fName,str), 'fName must be a string'
-        if '.dat' in fName[-4:]: fName = fName[:-4]
-        
-        assert self.nd == 3, 'printPhysicalPlanar() is currently written to handle only 3C velocity fields'
-        assert isinstance(etaLoc,np.ndarray) and isinstance(tLoc,np.ndarray),\
-            'xLoc, zLoc, and tLoc must be numpy arrays'
-        
-        
-        if pField is None: pField = self.solvePressure(divFree=False,nonLinear=True)[0]
-        else:
-            assert pField.size == self.size//3, 'pField must be the same size of each component of self'
-        obj = self.appendField(pField)   # Appending pField to velocity field
-        
-        dataArr = np.zeros((8,tLoc.size,etaLoc.size,yLoc.size))
-        
-        if interY != 1 and not yLocFlag:
-            obj = obj.slice(N=yLoc.size)
-        
-        
-        # .getField() requires x and z locations. So, mapping required etaLoc to xLoc (with zLoc=0), if a != 0
-        #       and to zLoc (with xLoc= 0) if a = 0. 
-        # gama*eta = a*x + b*z;     If z = 0., x = gama*eta/a.   If x = 0., z = gama*eta/b
-        if a != 0.: 
-            xLoc = gama*etaLoc/a; zLoc = 0.
-        else: 
-            xLoc = 0. ; zLoc = gama*etaLoc/b
-        
-        if yLocFlag: field = obj.getPhysical(tLoc=tLoc, xLoc=xLoc, zLoc=zLoc, yLoc=yLoc)
-        else: field = obj.getPhysical(tLoc=tLoc, xLoc=xLoc, zLoc=zLoc)
-        # The output of .getField(), field, will be of shape (tLoc.size, xLoc.size, zLoc.size, obj.nd, yLoc.size)
-        #     But either xLoc.size or zLoc.size is 1, compressing that axis:
-        field = field.reshape((tLoc.size, etaLoc.size, obj.nd, yLoc.size))
-        
-        tLoc = tLoc.reshape(tLoc.size,1,1)
-        etaLoc = etaLoc.reshape(1,etaLoc.size,1)
-        
-        # Assigning grid points:
-        dataArr[1] = etaLoc; 
-        dataArr[0] = yLoc + yOff*np.cos(gama*etaLoc-omega*tLoc)
-        
-        # In field, the scalars u,v,w,p are assigned on axis 2. dataArr needs these on axis 0, since the ascii is printed in columns
-        for scal in range(4):
-            dataArr[2+scal] = field[:,:,scal]
-        
-        # U_parallel and U_cross:
-        dataArr[6] = a/gama*dataArr[2] + b/gama*dataArr[4]
-        dataArr[7] = -b/gama*dataArr[2]+ a/gama*dataArr[4]
-        
-        if 'eps' in self.flowDict: eps = self.flowDict['eps']; g = eps*a
-        else: eps = 1.0E-9; g = 0
-        if a != 0.: theta = int(np.arctan(b/a)*180./np.pi)
-        else: theta = 90
-        variables = 'VARIABLES = "Y", "eta", "U", "V", "W", "P", "U_pl", "U_cr" \n'
-        zoneName = 'T'+str(theta)+'E'+str(-np.log10(eps))+'G'+str(g)+'Re'+str(self.flowDict['Re'])
-        zone = 'ZONE T="'+zoneName+ '", I='+str(yLoc.size)+', J='+str(etaLoc.size)+', DATAPACKING=POINT'
-        if tLoc.size == 1:
-            #np.savetxt(fName+'.csv', dataArr.reshape((7,dataArr.size//7)).T,delimiter=',')
-            #tempArr = dataArr.reshape(dataArr.size)
-            title = 'TITLE= "Flow (planar) in wavy walled channel with a='+str(a)+', b='+str(b)+\
-                ',Re_{\tau}='+str(self.flowDict['Re'])+'"\n'
-            hdr = title+variables+zone
-            np.savetxt(fName+'.dat',dataArr.reshape(8,dataArr.size//8).T, header=hdr,comments='')
-            print('Printed physical field to file %s.dat'%fName)
-        else:
-            for tn in range(tLoc.size):
-                title = 'TITLE= "Flow (planar) in wavy walled channel at t='+str(tLoc[tn,0,0])+' with a='+str(a)+', b='+str(b)+\
-                    ',Re_{\tau}='+str(self.flowDict['Re'])+'"\n'
-                hdr = title+variables+zone
-                np.savetxt(fName+str(tn)+'.dat', dataArr[:,tn].reshape((8,dataArr[:,tn].size//8)).T,header=hdr,comments='')
-            print('Printed %d time-resolved physical fields to files %sX.dat'%(tLoc.size,fName))
-        
-        return
 
     def zero(self):
         """Returns an object of the same class and shape as self, but with zeros as entries"""
@@ -859,4 +671,83 @@ class flowField(np.ndarray):
 
     def identity(self):
         return self
-    
+
+    def appendField(self, ff):
+        """ Combine fields from different flowField instances
+        This isn't very complicated since modes evolve independently, 
+            and the spec2phys routines don't use iFFT.
+        IMPORTANT: ONLY WORKS IF EITHER aArr or bArr ARE IDENTICAL IN SELF AND FF
+        For a more generalized version, use flowField.messyAppendField()
+
+        Inputs:
+            ff: flowField that needs to be appended
+                    Must have all attributes to be identical to self except for 
+                        either aArr xor bArr 
+        Outputs:
+            ffLong: appended flowField
+        """
+        # Ensure sorted a and b arrs so that the later stuff makes sense
+        self.aArr = np.sort(self.aArr); self.bArr = np.sort(self.bArr)
+        ff.aArr = np.sort(ff.aArr); ff.bArr = np.sort(ff.bArr)
+
+        assert all([self.flowDict[key] == ff.flowDict[key] for key in self.flowDict])
+        assert self.N == ff.N 
+
+        if (self.aArr == ff.aArr).all():
+            assert not (self.bArr == ff.bArr).any()
+            bNew = np.sort( np.concatenate(( self.bArr, ff.bArr )) )
+            ffLong = flowField( self.aArr, bNew, self.N, flowDict = self.flowDict )
+            for i0 in range(ffLong.shape[0]):
+                a = self.aArr[i0]
+                i1self = 0; i1ff = 0
+                for i1 in range(ffLong.shape[1]):
+                    b = bNew[i1]
+                    # This is a little bit tricky 
+                    # I don't want to keep finding the index of b in self.bArr or ff.bArr
+                    # Since the bArrs in all 3 instances are sorted, just start by pointing
+                    #   at bIndex = 0 for all 3, then advance by 1 everytime there's a match
+                    if b in self.bArr:
+                        ffLong[i0,i1] = self[i0,i1self]
+                        i1self += 1
+                    elif b in ff.bArr:
+                        ffLong[i0,i1] = ff[i0,i1ff]
+                        i1ff += 1
+                    else:
+                        print("Something's wrong with appending at a,b=",a,b)
+        
+        elif (self.bArr == ff.bArr).all():
+            assert not (self.aArr == ff.aArr).any()
+            aNew = np.sort( np.concatenate(( self.aArr, ff.aArr )) )
+            ffLong = flowField( aNew, self.bArr, self.N, flowDict = self.flowDict )
+            for i1 in range(ffLong.shape[1]):
+                b = self.bArr[i1]
+                i0self = 0; i0ff = 0
+                for i0 in range(ffLong.shape[0]):
+                    a = aNew[i0]
+                    # This is a little bit tricky 
+                    # I don't want to keep finding the index of a in self.aArr or ff.aArr
+                    # Since the aArrs in all 3 instances are sorted, just start by pointing
+                    #   at aIndex = 0 for all 3, then advance by 1 everytime there's a match
+                    if a in self.aArr:
+                        ffLong[i0,i1] = self[i0self,i1]
+                        i0self += 1
+                    elif a in ff.aArr:
+                        ffLong[i0,i1] = ff[i0ff,i1]
+                        i0ff += 1
+                    else:
+                        print("Something's wrong with appending at a,b=",a,b)
+        else:
+            self.messyAppendField(ff)
+        return ffLong
+        
+    def messyAppendField(self,ff):
+        """ Combine flowFields, like appendField(), but without the restriction
+        When (a,b) in the new ff instance is not in either self or ff, leave zeros
+
+        Inputs:
+            ff: flowField to be appended
+        Outputs:
+            ffLong:     Appended field"""
+        raise RuntimeError("This isn't ready yet... Ensure appendField can be used..")
+        return
+
