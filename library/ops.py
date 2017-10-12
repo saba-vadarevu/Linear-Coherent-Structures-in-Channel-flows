@@ -128,10 +128,10 @@ class linearize(object):
         self.flowState = flowState
         self.weightDict = pseudo.weightMats(self.N)
 
-        warn("Initialized instance of 'linearize', version %s." %(self.__version__)+
-                "New in this version: All system matrices are defined in makeSystem('eddy'=False,'adjoint'=False)"+
-                "Eddy viscosity enhancement is allowed, but baseflow is reset to turbulent according to turbMeanChannel()"+
-                "matNorm() defined to compute 2-norm and HS norm directly from unweighted matrices"+
+        warn("Initialized instance of 'linearize', version %s.\n" %(self.__version__)+
+                "New in this version: All system matrices are defined in makeSystem('eddy'=False,'adjoint'=False)\n"+
+                "Eddy viscosity enhancement is allowed, but baseflow is reset to turbulent according to turbMeanChannel()\n"+
+                "matNorm() defined to compute 2-norm and HS norm directly from unweighted matrices\n"+
                 "weightDict is added as a class attribute")
 
         return
@@ -206,10 +206,6 @@ class linearize(object):
         What this OSS matrix is is given in function comments.
         Essentially, I define OSS*[vel,vor].T =: -i.omega*[vel,vor].T
         """
-        # For consistency, I use 2d numpy arrays instead of numpy matrices
-        # Where dot products are needed, use np.dot(A,B) instead of A*B
-        warn("To use eddy viscosity, pass kwarg 'eddy'=True; default=False")
-        warn("To produce adjoint matrices, pass kwarg 'adjoint'=True; default=False")
 
 
         a = kwargs.get('a', 2.5)
