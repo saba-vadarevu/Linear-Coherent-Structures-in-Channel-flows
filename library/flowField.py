@@ -155,6 +155,8 @@ def loadff(fName):
     
 
 
+
+
 class flowField(np.ndarray):
     """
     Defines a class (inheriting numpy.ndarray) for plane channel and Couette flows
@@ -660,6 +662,8 @@ class flowField(np.ndarray):
         if vorzField: returnList.append(vorzPhys)
         
         return returnList
+
+
 
 
     def zero(self):
