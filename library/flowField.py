@@ -1,5 +1,4 @@
-""" flowField.py
-Defines a class (inheriting numpy.ndarray) for plane channel and Couette flows
+""" flowField.py Defines a class (inheriting numpy.ndarray) for plane channel and Couette flows
     Discretization is Fourier, Fourier, Chebyshev (collocation), Fourier in x,y,z
     z is spanwise
 Class instances have shape (nx, nz, N) for x,z, and y
@@ -153,6 +152,58 @@ def loadff(fName):
 
     return ff
     
+def add2physical(u=None, vorz=None, swirl=None, ffList=None, fNameList=None, ySpace='linear',**kwargs):
+    """ 
+    Add u, omega_z, and swirling strength due to modes in a supplied flowField 
+    Inputs:
+        v(=None):  3D array to add 'u' to
+        vorz(=None): 3D array to add omega_z to
+        swirl(=None):3D array to add swirling strength to
+        ff (=None): flowField instance to generate the above fields
+        fName (=None):  If ff is not supplied, load ff from file fName
+        ySpace (='linear'): If 'linear', use linear grid in y, if 'cheb', use Chebyshev
+        **kwargs:   physical grid paramters: x0, x1, z0, z1 
+                xArr is generated as np.linspace(x0,x1,nx), similarly zArr
+    """
+    assert u.shape == vorz.shape == swirl.shape
+
+    if np.linalg.norm(swirl, ord='fro') >= 1.0e-9:
+        warn("swirling strength isn't supposed to be superposed\n"+
+                "Or maybe it can be, but I don't have proof of that yet.\n"+
+                "Anyway, until I don't prove it, don't use superpositon.")
+
+    Lx = 2.*np.pi/ff.aArr[0]; Lz = 2.*np.pi/ff.bArr[0]
+    if not set(('x0','x1')) <= set(kwargs):
+        x0 = -0.1*Lx; x1 = 0.9*Lx; 
+        xShift = kwargs.get('xShift',2./3.* np.amax(ff.U)*ff.flowDict['t'])
+    else:
+        x0 = kwargs['x0']; x1 = kwargs['x1']
+        xShift = kwargs.get('xShift',0.)
+    if not set(('z0','z1')) <= set(kwargs):
+        z0 = -0.5*Lz; z1 = 0.5*Lz; 
+    else:
+        z0 = kwargs['z0']; z1 = kwargs['z1']
+    xArr =  xShift + np.linspace(x0, x1, u.shape[0])
+    zArr =  zShift + np.linspace(z0, z1, u.shape[0])
+
+    # I could call flowField.swirl(), which returns swirl, u, vorz.
+    #   u and vorz can be added from different sets of modes,
+    #   but I can't do that for swirl, so
+    velGrad = np.zeros(( xArr.size, zArr.size, yArr.size, 3, 3 ))
+    warn("THIS ROUTINE IS INCOMPLETE. DO NOT USE IT.")
+    if fNameList is not None:
+        for fName in fNameList:
+            ff = loadff(fName)
+            u[:] += ff.toPhysical(arr=ff[:,:,0], xArr=xArr, zArr=zArr, N=u.shape[-1], 
+                    fName=None, symm='even', ySpace=kwargs['ySpace'])
+            ffx = self.ddx() 
+            vorz[:] += toPhysical(arr=ff[:,:,0], xArr=xArr, zArr=zArr, N=u.shape[-1], 
+                    fName=None, symm='even', ySpace=kwargs['ySpace'])
+
+            print("Successfully added u, vorz, and velGrad from ", fName)
+
+    return
+
 
 
 
@@ -183,7 +234,6 @@ class flowField(np.ndarray):
         div, grad, curl, invariants, swirl
         dot, norm, weighted
         flux, dissipation, energy, powerInput
-        direcDeriv, ifft, getPhysical, makePhysical, makePhysicalPlanar
 
 
     self.verify() ensures that the shape attributes are self-consistent. 
