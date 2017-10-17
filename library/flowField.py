@@ -139,11 +139,13 @@ def loadff(fName):
         fName = fNamePrefix +'.mat'
 
     loadDict =  loadmat(fName)
-    keyList=['Re', 'flowClass', 'flowState', 'eddy', 't']
-    flowDict = {}
-    for key in keyList: flowDict[key] = loadDict[key]
+    # Because loadmat formats scalars as arrays, 
+    flowDict = {'N': int(loadDict['N']), 'Re': float(loadDict['Re']), 't':float(loadDict['t']),\
+            'flowClass': str(loadDict['flowClass'][0]), 'flowState': str(loadDict['flowState'][0]), 'eddy': str(loadDict['eddy'][0]) }
+        
 
-    aArr = loadDict['aArr']; bArr = loadDict['bArr']; N = loadDict['N']
+    aArr = loadDict['aArr'].flatten(); bArr = loadDict['bArr'].flatten() 
+    N = flowDict['N']
 
     ff = flowField(aArr, bArr, N, flowDict=flowDict)
     ff[:] = loadDict['ffArr']
@@ -747,8 +749,9 @@ class flowField(np.ndarray):
         assert all([self.flowDict[key] == ff.flowDict[key] for key in self.flowDict])
         assert self.N == ff.N 
 
-        if (self.aArr == ff.aArr).all():
-            assert not (self.bArr == ff.bArr).any()
+        if (self.aArr.size == ff.aArr.size) and (self.aArr == ff.aArr).all():
+            #assert not (self.bArr == ff.bArr).any()
+            warn("I'm not checking for coinciding bArr; ensure it doesn't happen.")
             bNew = np.sort( np.concatenate(( self.bArr, ff.bArr )) )
             ffLong = flowField( self.aArr, bNew, self.N, flowDict = self.flowDict )
             for i0 in range(ffLong.shape[0]):
@@ -769,9 +772,10 @@ class flowField(np.ndarray):
                     else:
                         print("Something's wrong with appending at a,b=",a,b)
         
-        elif (self.bArr == ff.bArr).all():
-            assert not (self.aArr == ff.aArr).any()
-            aNew = np.sort( np.concatenate(( self.aArr, ff.aArr )) )
+        elif (self.bArr.size == ff.bArr.size) and (self.bArr == ff.bArr).all():
+            #assert not (self.aArr == ff.aArr).any()
+            warn("I'm not checking for coinciding aArr; ensure it doesn't happen.")
+            aNew = np.sort( np.concatenate(( self.aArr.flatten(), ff.aArr )) )
             ffLong = flowField( aNew, self.bArr, self.N, flowDict = self.flowDict )
             for i1 in range(ffLong.shape[1]):
                 b = self.bArr[i1]
