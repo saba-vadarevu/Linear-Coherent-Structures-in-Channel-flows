@@ -487,7 +487,7 @@ class flowField(np.ndarray):
             arr[:,0] = 0.
 
         arrPhys = np.zeros((xArr.size, zArr.size, yArr.size)) 
-        def _spec2phys(x,z,someArr):
+        def _spec2phys(x,z,someArr,symm='even'):
             # symm = even refers to f(z) = f(-z), 
             #   and the other (symm=odd) refers to f(z) = -f(-z)
             # Even symm holds for ux, uy, vx, vy, wz
@@ -523,7 +523,7 @@ class flowField(np.ndarray):
 
 
     def swirl(self, xArr=None, zArr=None, N=None, fName=None, 
-            uField=False,vorzField=False, saveff=False):
+            uField=False,vorzField=False, saveff=False, ySpace='linear', fft=False):
         """ Returns the swirling strength for the field in physical space
         Inputs:
             xArr, zArr (=None,None) :  Coordinates for x and z
@@ -556,10 +556,17 @@ class flowField(np.ndarray):
             print("zArr is not supplied... Using 128 points in [%.3g,%.3g]"%(-Lz/2, Lz/2))
         else:
             assert zArr.ndim ==1
+        interpFlag = True
         if N is not None:
-            yArr = np.linspace(1., -1., N+2)[1:-1]
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., N+2)[1:-1]
+            else: yArr = pseudo.chebdif(N,1)[0]
         else:
-            yArr = np.linspace(1., -1., self.N+2)[1:-1]
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., self.N+2)[1:-1]
+            else:
+                yArr = self.y.copy()
+                interpFlag = False
 
 
 
@@ -689,6 +696,8 @@ class flowField(np.ndarray):
                     # I assume P = 0, as it should be, to reduce the cubic equation to
                     # l^3 + Ql + R = 0
                     # Solutions to this equation are 
+                    #   ... To be continued
+
                 else:
                     # Just use eigenvalue calculation instead of solving characteristic equations
                     # Return to this after profiling
@@ -696,8 +705,11 @@ class flowField(np.ndarray):
                     for i2 in range(self.N):
                         evals = np.linalg.eigvals(velGrad[i2])
                         tmpSwirl[i2] = np.max( np.imag(evals))
-                    swirlStrength[i0,i1] = pseudo.chebint(tmpSwirl, yArr)
-                        # Is there something about orientation of vortex cores?
+                    if interpFlag:
+                        swirlStrength[i0,i1] = pseudo.chebint(tmpSwirl, yArr)
+                    else:
+                        swirlStrength[i0,i1] = tmpSwirl
+                    # Is there something about orientation of vortex cores?
         if fName is not None:
             if not (fName[-4:] =='.mat'): fName = fName + '.mat'
             flowDict = self.flowDict
