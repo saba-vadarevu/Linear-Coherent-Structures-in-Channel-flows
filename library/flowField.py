@@ -125,11 +125,11 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
         for tInd in range(tArr.size):
             t = tArr[tInd]
             ff = FxList[tInd] 
-            ff.saveff(fPrefix+"_Fx_t%04d"%(10.*t))
+            ff.saveff(fPrefix+"_Fx_t%05d"%(100.*t))
             ff = FyList[tInd] 
-            ff.saveff(fPrefix+"_Fy_t%04d"%(10.*t))
+            ff.saveff(fPrefix+"_Fy_t%05d"%(100.*t))
             ff = FzList[tInd] 
-            ff.saveff(fPrefix+"_Fz_t%04d"%(10.*t))
+            ff.saveff(fPrefix+"_Fz_t%05d"%(100.*t))
     
     return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[1]}
 
@@ -702,7 +702,7 @@ class flowField(np.ndarray):
                         if interpFlag:
                             uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
                     if vorzField:
-                        vorzPhys[i0,i1] = -self.dU + _spec2phys(x,z,vorzSpec, symm='even')
+                        vorzPhys[i0,i1] = _spec2phys(x,z,vorzSpec, symm='even') # -self.dU  
                         if interpFlag:
                             vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
 
@@ -748,7 +748,7 @@ class flowField(np.ndarray):
                 if interpFlag:
                     uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
             if vorzField:
-                vorzPhys[i0,i1] = -self.dU + _spec2phys(x,z,vorzSpec, symm='even')
+                vorzPhys = _spec2physIfft( vorzSpec, symm='even') # - (self.dU).reshape((1,1,self.N))  
                 if interpFlag:
                     vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
 
