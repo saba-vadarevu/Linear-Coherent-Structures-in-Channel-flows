@@ -525,8 +525,7 @@ class flowField(np.ndarray):
     def swirl(self, xArr=None, zArr=None, N=None, fName=None, 
             uField=False,vorzField=False, saveff=False, ySpace='linear', fft=False):
         """ Returns the swirling strength for the field in physical space
-        Inputs:
-            xArr, zArr (=None,None) :  Coordinates for x and z
+        Inputs: xArr, zArr (=None,None) :  Coordinates for x and z
                 If not set, use the smallest non-zero 'a' and 'b'
                     For z, use 0: 2pi/b
                     For x, use self.U[y=0]*self.flowDict['t'] + 0:2pi/a
@@ -752,6 +751,17 @@ class flowField(np.ndarray):
                 if interpFlag:
                     vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
 
+        if fft:
+            # If iFFT was used, then the structure of the matrices is different
+            Lx = 2.*np.pi/self.aArr[0]; Lz = 2.*np.pi/self.bArr[0]
+            L = self.aArr.size; M = self.bArr.size
+            xArr = np.arange(0., Lx, 2*L)
+            zArr = np.arange(-Lz/2., Lz/2., 2*M)
+            swirlStrength = np.concatenate((swirlStrength[:,M:], swirlStrength[:,:M]),axis=1)
+            if uField:
+                uPhys = np.concatenate((uPhys[:,M:], uPhys[:,:M]),axis=1)
+            if vorzField:
+                vorzPhys = np.concatenate((vorzPhys[:,M:], vorzPhys[:,:M]),axis=1)
 
 
         if fName is not None:
