@@ -522,7 +522,7 @@ class flowField(np.ndarray):
 
 
 
-    def swirl(self, xArr=None, zArr=None, N=None, fName=None, 
+    def swirl(self, xArr=None, zArr=None, N=None, fName=None, padded=True,
             uField=False,vorzField=False, saveff=False, ySpace='linear', fft=False):
         """ Returns the swirling strength for the field in physical space
         Inputs: xArr, zArr (=None,None) :  Coordinates for x and z
@@ -641,13 +641,13 @@ class flowField(np.ndarray):
         assert np.linalg.norm( self.aArr - a0*np.arange(1,self.shape[0]+1) ) <= 1.e-09
         assert np.linalg.norm( self.bArr - b0*np.arange(1,self.shape[1]+1) ) <= 1.e-09
 
-        def _spec2physIfft(arr, symm='even'):
+        def _spec2physIfft(arr, symm='even',padded=True):
             # Let's use ifft to get the field this time
             # symm decides how I should extend the Fourier coeffs in the first quadrant
             #   of the a-b plane to the second quadrant.
             # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
             # For odd  symm, I extend as f_{-a,b} = conj( f_{a,-b} ) =-conj( f_{a,b} )
-            L = arr.shape[0]; M = arr.shape[1]
+            L = arr.shape[0]; M = arr.shape[1]; N= arr.shape[2]
             assert L > 1, "Use _spec2phys() instead of _spec2physIfft() for such small cases"
             arrExt = np.zeros( (2*L, M+1,yArr.size), dtype=np.complex)
             # numpy's ifft needs coeffs for a to go as 0,1,..,L, -L+1,-L+2,...,-1
@@ -663,7 +663,11 @@ class flowField(np.ndarray):
 
             # The array is now ready to be used for numpy's rifft2
             scaleFactor = (2*L * 2*M)   # times something related to a0,b0??
-            return scaleFactor*np.fft.irfft2( arrExt, axes=(0,1) )  
+            if not padded:
+                return scaleFactor*np.fft.irfft2( arrExt, axes=(0,1) )  
+            else:
+                return scaleFactor*np.fft.irfft2( arrExt, s=(4*L,4*M,N),axes=(0,1) )  
+
 
         
         # Shouldn't be too hard to figure out a better way,
@@ -721,17 +725,17 @@ class flowField(np.ndarray):
         else:
             # This uses lots more memory, but should be faster
             velGrad = np.zeros( (2*self.shape[0], 2*self.shape[1], yArr.size, 3, 3) )
-            velGrad[:,:,:,0,0] = _spec2physIfft( ux, symm='even')
-            velGrad[:,:,:,0,1] = _spec2physIfft( uy, symm='even')
-            velGrad[:,:,:,0,2] = _spec2physIfft( uz, symm='odd' )
+            velGrad[:,:,:,0,0] = _spec2physIfft( ux, symm='even', padded=padded)
+            velGrad[:,:,:,0,1] = _spec2physIfft( uy, symm='even', padded=padded)
+            velGrad[:,:,:,0,2] = _spec2physIfft( uz, symm='odd' , padded=padded)
 
-            velGrad[:,:,:,1,0] = _spec2physIfft( vx, symm='even')
-            velGrad[:,:,:,1,1] = _spec2physIfft( vy, symm='even')
-            velGrad[:,:,:,1,2] = _spec2physIfft( vz, symm='odd' )
+            velGrad[:,:,:,1,0] = _spec2physIfft( vx, symm='even', padded=padded)
+            velGrad[:,:,:,1,1] = _spec2physIfft( vy, symm='even', padded=padded)
+            velGrad[:,:,:,1,2] = _spec2physIfft( vz, symm='odd' , padded=padded)
 
-            velGrad[:,:,:,2,0] = _spec2physIfft( wx, symm='odd' )
-            velGrad[:,:,:,2,1] = _spec2physIfft( wy, symm='odd' )
-            velGrad[:,:,:,2,2] = _spec2physIfft( wz, symm='even')
+            velGrad[:,:,:,2,0] = _spec2physIfft( wx, symm='odd' , padded=padded)
+            velGrad[:,:,:,2,1] = _spec2physIfft( wy, symm='odd' , padded=padded)
+            velGrad[:,:,:,2,2] = _spec2physIfft( wz, symm='even', padded=padded)
             # The velocity gradient tensor is now in memory, let's get the swirling strength
             for i0 in range(velGrad.shape[0]):
                 for i1 in range(velGrad.shape[1]):
@@ -743,11 +747,11 @@ class flowField(np.ndarray):
             velGrad = None
 
             if uField:
-                uPhys = _spec2physIfft( uSpec, symm='even')
+                uPhys = _spec2physIfft( uSpec, symm='even', padded=padded)
                 if interpFlag:
                     uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
             if vorzField:
-                vorzPhys = _spec2physIfft( vorzSpec, symm='even') # - (self.dU).reshape((1,1,self.N))  
+                vorzPhys = _spec2physIfft( vorzSpec, symm='even', padded=padded) # - (self.dU).reshape((1,1,self.N))  
                 if interpFlag:
                     vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
 
