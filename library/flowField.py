@@ -522,39 +522,47 @@ class flowField(np.ndarray):
 
 
 
-    def swirl(self, xArr=None, zArr=None, N=None, fName=None, padded=True,
-            uField=False,vorzField=False, saveff=False, ySpace='linear', fft=False):
+    def swirl(self, x0=None, x1=None, z0=None, z1=None, N=None, fName=None, padded=True,
+            uField=False,vorzField=False, saveff=False, ySpace='linear'):
         """ Returns the swirling strength for the field in physical space
-        Inputs: xArr, zArr (=None,None) :  Coordinates for x and z
-                If not set, use the smallest non-zero 'a' and 'b'
-                    For z, use 0: 2pi/b
-                    For x, use self.U[y=0]*self.flowDict['t'] + 0:2pi/a
+        IMPORTANT: aArr and bArr must be (positive) integral multiples of aArr[0] and bArr[0]
+        This function runs only on numpy's ifft; the custom ifft is now dropped
+        Inputs:             
+            x0, x1, z0, z1; all None by default
+                If they're not specified, use domain x in [0,Lx], z in [-Lz/2,Lz/2]
+                If any of them is specified, truncate domain to [x0,x1] , [z0,z1]
             N (=None):  If set, interpolate to a different wall-normal grid
             fName (=None): If not None, dump all of the important bits to a .mat file
+            padded (=True): pad x-z modes to twice the number to get finer physical field
             uField (=False): If True, return/save streamwise velocity field  (physical)
             vorzField(=False): If True, return/save spanwise vorticity field (physical)
             saveff (=False):  If True, include the array of the spectral flow field in the .mat file
+            ySpace (='linear'): If 'cheb', keep data on Chebyshev grid
+                                If 'linear', interpolate to uniformly spaced points
         """
-        
-        xShift = np.amax(self.U) * self.flowDict['t']
-        if xArr is None:
-            a0 = self.aArr[0]
-            if a0 == 0.: a0 = self.aArr[1]
-            Lx = 2.*np.pi/a0
-            xArr = xShift + np.linspace(0., Lx, 64)
-            print("xArr is not supplied... Using 64 points in %.3g + [0,%.3g]"%(xShift,Lx))
-        else:
-            assert xArr.ndim == 1
-            if not ( xArr[0] <= xShift <= xArr[-1] ):
-                print("xArr doesn't contain xShift = %.3g.. You sure it's okay?"%xShift)
-        if zArr is None:
-            b0 = self.bArr[0]
-            if b0 == 0.: b0 = self.bArr[1]
-            Lz = 2.*np.pi/b0
-            zArr = np.linspace(-Lz/2, Lz,64) 
-            print("zArr is not supplied... Using 128 points in [%.3g,%.3g]"%(-Lz/2, Lz/2))
-        else:
-            assert zArr.ndim ==1
+        L = self.aArr.size; M = self.bArr.size 
+        if padded: nx = 4*L; nz = 4*M
+        else: nx = 2*L; nz = 2*M
+
+        a0 = self.aArr[0]; b0 = self.bArr[0]
+        if a0 == 0.: a0 = self.aArr[1]
+        if b0 == 0.: b0 = self.bArr[1]
+
+        # Ensure aArr and bArr are integral multiples
+        if not (self.aArr % a0 == 0.).all():
+            print("aArr doesn't seem to be integral multiples. Have a look")
+            print("a0 is", a0)
+            print("aArr/a0 is ", self.aArr/a0)
+        if not (self.bArr % b0 == 0.).all():
+            print("bArr doesn't seem to be integral multiples. Have a look")
+            print("b0 is", b0)
+            print("bArr/b0 is ", self.bArr/b0)
+       
+        # Grids in x, z, and y
+        # Worry about x0, x1, z0, z1 after the iFFT
+        Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        xArr = np.linspace(0., Lx, nx+1)[:-1]
+        zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
         interpFlag = True
         if N is not None:
             if ySpace == 'linear':
@@ -568,7 +576,6 @@ class flowField(np.ndarray):
                 interpFlag = False
 
 
-
         # Including (a,0) and (0,b) is a bit of a pain. For now, I'll ignore them 
         a0bool = (self.aArr[0] == 0.)
         b0bool = (self.bArr[0] == 0.)
@@ -579,7 +586,6 @@ class flowField(np.ndarray):
         
         # self has only first quadrant of kx-kz plane
         # To account for the other 3 quadrants, I must multiply by 4
-         
         
         tmpArr = self.ddx()
         _seta0b0(tmpArr)     # Get rid of (a,0) and (0,b) modes if they're in there
@@ -596,53 +602,15 @@ class flowField(np.ndarray):
         uz = tmpArr.copyArray()[:,:,0]
         vz = tmpArr.copyArray()[:,:,1]
         wz = tmpArr.copyArray()[:,:,2]
+        tmpArr = None
 
         if uField:
             uSpec = self.copyArray()[:,:,0]
             _seta0b0(uSpec)
-            if not fft:
-                uPhys = np.zeros((xArr.size, zArr.size, yArr.size))
-                # If doing fft, there's no need to explicitly define uPhys first,
-                #   I can assign it to the returned value of _spec2physIfft
         if vorzField:
             vorzSpec = vx - uy
-            if not fft:
-                vorzPhys = np.zeros((xArr.size, zArr.size, yArr.size))
-                # See comments above
-
-        if not fft: 
-            swirlStrength = np.zeros((xArr.size, zArr.size, yArr.size))
-        else:
-            swirlStrength = np.zeros((2*self.shape[0], 2*self.shape[1], yArr.size))
-
-        aArr = self.aArr.reshape((self.aArr.size,1,1))
-        bArr = self.bArr.reshape((1,self.bArr.size,1))
-
-        # Extracting physical field at some (x,z) is done as so:
-        # It'd be straight-forward if I had all 4 quadrants of a-b, but since I have them
-        #   I need to account for spanwise reflectional symmetry.
-        def _spec2phys(x,z,arr,symm='even'):
-            # symm = even refers to f(z) = f(-z), 
-            #   and the other (symm=odd) refers to f(z) = -f(-z)
-            # Even symm holds for ux, uy, vx, vy, wz
-            # Odd symm holds for uz, vz, wx, wy
-            if symm == 'even':
-                physArr = 4.* np.sum( np.sum(
-                    np.cos(bArr * z) * np.real( arr * np.exp(1.j*aArr*x) ),
-                    axis = 1), axis = 0)
-            else:
-                physArr = -4.* np.sum( np.sum(
-                    np.sin(bArr * z) * np.imag( arr * np.exp(1.j*aArr*x) ),
-                    axis = 1), axis = 0)
-            return np.real(physArr)
-
-        a0 = self.aArr[0]; b0 = self.bArr[0]
-        # Just to be sure I'm not messing up, ensure aArr and bArr are integral multiples 
-        assert np.linalg.norm( self.aArr - a0*np.arange(1,self.shape[0]+1) ) <= 1.e-09
-        assert np.linalg.norm( self.bArr - b0*np.arange(1,self.shape[1]+1) ) <= 1.e-09
 
         def _spec2physIfft(arr, symm='even',padded=True):
-            # Let's use ifft to get the field this time
             # symm decides how I should extend the Fourier coeffs in the first quadrant
             #   of the a-b plane to the second quadrant.
             # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
@@ -662,110 +630,64 @@ class flowField(np.ndarray):
                 arrExt[ :L:-1,1:] =-np.conj( arr[ :L-1,: ] ) 
 
             # The array is now ready to be used for numpy's rifft2
-            scaleFactor = (2*L * 2*M)   # times something related to a0,b0??
-            if not padded:
-                return scaleFactor*np.fft.irfft2( arrExt, axes=(0,1) )  
-            else:
-                return scaleFactor*np.fft.irfft2( arrExt, s=(4*L,4*M,N),axes=(0,1) )  
+            scaleFactor = nx * nz    # times something related to a0,b0??
+            physField =  scaleFactor*np.fft.irfft2( arrExt, s=(nx, nz),axes=(0,1) )  
+            
+            # This field goes from 0 to Lz in z. I want to to go from -Lz/2 to Lz/2:
+            physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
+            return physField
 
 
+        # Let's start working on truncating the domain according to x0,x1,z0,z1
+        if (x0 is None) or (x0<0.): x0ind = 0
+        else:   x0ind = np.where(xArr <= x0)[0][-1]     # Index of largest entry of xArr <= x0
+        if (x1 is None) or (x1>xArr[-1]): x1ind = nx
+        else:   x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
         
-        # Shouldn't be too hard to figure out a better way,
-        #   but I'll stick with the loop for now
-        if not fft:
-            velGrad = np.zeros((self.N,3,3))
-            invariants = np.zeros((self.N,3))
-            for i0 in range(xArr.size):
-                x = xArr[i0]
-                for i1 in range(zArr.size):
-                    z = zArr[i1]
-                    # ux(z)=ux(-z)
-                    velGrad[:,0,0] = _spec2phys(x,z,ux,symm='even')
-                    # uy(z)=uy(-z)
-                    velGrad[:,0,1] = _spec2phys(x,z,uy,symm='even') + self.dU
-                    # uz(z)=-uz(-z)
-                    velGrad[:,0,2] = _spec2phys(x,z,uz,symm='odd')
-                    
-                    # vx(z)=vx(-z)
-                    velGrad[:,1,0] = _spec2phys(x,z,vx,symm='even')
-                    # vy(z)=vy(-z)
-                    velGrad[:,1,1] = _spec2phys(x,z,vy,symm='even')
-                    # vz(z)=-vz(-z)
-                    velGrad[:,1,2] = _spec2phys(x,z,vz,symm='odd')
+        if (z0 is None) or (z0< -Lz/2.): z0ind = 0
+        else:   z0ind = np.where(zArr <= z0)[0][-1]     # See above
+        if (z1 is None) or (z1> zArr[-1]): z1ind = nz
+        else:   z1ind = np.where(zArr >= z0)[0][0] + 1
+        
+        nx1 = x1ind - x0ind
+        nz1 = z1ind - z0ind
+        velGrad = np.zeros( (nx1, nz1, yArr.size, 3, 3) )
+        xArr = xArr[x0ind:x1ind]; zArr = zArr[z0ind:z1ind]
 
-                    # wx(z)=-wx(-z)
-                    velGrad[:,2,0] = _spec2phys(x,z,wx,symm='odd')
-                    # wy(z)=-wy(-z)
-                    velGrad[:,2,1] = _spec2phys(x,z,wy,symm='odd')
-                    # wz(z)=wz(-z)
-                    velGrad[:,2,2] = _spec2phys(x,z,wz,symm='even')
+        velGrad[:,:,:,0,0] = _spec2physIfft( ux, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,0,1] = _spec2physIfft( uy, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,0,2] = _spec2physIfft( uz, symm='odd' , padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        ux = None; uy = None; uz = None # Free up some memory
 
+        velGrad[:,:,:,1,0] = _spec2physIfft( vx, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,1,1] = _spec2physIfft( vy, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,1,2] = _spec2physIfft( vz, symm='odd' , padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        vx = None; vy = None; vz = None
+
+        velGrad[:,:,:,2,0] = _spec2physIfft( wx, symm='odd' , padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,2,1] = _spec2physIfft( wy, symm='odd' , padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        velGrad[:,:,:,2,2] = _spec2physIfft( wz, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        wx = None; wy = None; wz = None
+        
+        swirlStrength = velGrad2swirl(velGrad)
+
+        velGrad = None  
+
+        if uField:
+            uPhys = _spec2physIfft( uSpec, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+
+        if vorzField:
+            vorzPhys = _spec2physIfft( vorzSpec, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+
+        if interpFlag:
+            for i0 in range(nx1):
+                for i1 in range(nz1):
+                    swirlStrength[i0,i1] = pseudo.chebint(swirlStrength[i0,i1], yArr)
                     if uField:
-                        uPhys[i0,i1] = _spec2phys(x,z,uSpec,symm='even')
-                        if interpFlag:
-                            uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
+                        uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
                     if vorzField:
-                        vorzPhys[i0,i1] = _spec2phys(x,z,vorzSpec, symm='even') # -self.dU  
-                        if interpFlag:
-                            vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
+                        vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1],yArr)
 
-                    # We have velGrad now, on to calculating the invariants, P,Q,R
-                    # Refer to Chakraborty, Balachandar and Adrian, JFM 2005
-                    # Just use eigenvalue calculation instead of solving characteristic equations
-                    # Return to this after profiling
-                    tmpSwirl = np.zeros(self.N)
-                    for i2 in range(self.N):
-                        evals = np.linalg.eigvals(velGrad[i2])
-                        tmpSwirl[i2] = np.max( np.imag(evals))
-                    if interpFlag:
-                        swirlStrength[i0,i1] = pseudo.chebint(tmpSwirl, yArr)
-                    else:
-                        swirlStrength[i0,i1] = tmpSwirl
-                    # Is there something about orientation of vortex cores?
-        else:
-            # This uses lots more memory, but should be faster
-            velGrad = np.zeros( (2*self.shape[0], 2*self.shape[1], yArr.size, 3, 3) )
-            velGrad[:,:,:,0,0] = _spec2physIfft( ux, symm='even', padded=padded)
-            velGrad[:,:,:,0,1] = _spec2physIfft( uy, symm='even', padded=padded)
-            velGrad[:,:,:,0,2] = _spec2physIfft( uz, symm='odd' , padded=padded)
-
-            velGrad[:,:,:,1,0] = _spec2physIfft( vx, symm='even', padded=padded)
-            velGrad[:,:,:,1,1] = _spec2physIfft( vy, symm='even', padded=padded)
-            velGrad[:,:,:,1,2] = _spec2physIfft( vz, symm='odd' , padded=padded)
-
-            velGrad[:,:,:,2,0] = _spec2physIfft( wx, symm='odd' , padded=padded)
-            velGrad[:,:,:,2,1] = _spec2physIfft( wy, symm='odd' , padded=padded)
-            velGrad[:,:,:,2,2] = _spec2physIfft( wz, symm='even', padded=padded)
-            # The velocity gradient tensor is now in memory, let's get the swirling strength
-            for i0 in range(velGrad.shape[0]):
-                for i1 in range(velGrad.shape[1]):
-                    for i2 in range(velGrad.shape[2]):
-                        evals = np.linalg.eigvals(velGrad[i0,i1,i2])
-                        swirlStrength[i0,i1,i2] = np.max( np.imag(evals) )
-                    if interpFlag:
-                        swirlStrength[i0,i1] = pseudo.chebint(swirlStrength[i0,i1], yArr)
-            velGrad = None
-
-            if uField:
-                uPhys = _spec2physIfft( uSpec, symm='even', padded=padded)
-                if interpFlag:
-                    uPhys[i0,i1] = pseudo.chebint(uPhys[i0,i1],yArr)
-            if vorzField:
-                vorzPhys = _spec2physIfft( vorzSpec, symm='even', padded=padded) # - (self.dU).reshape((1,1,self.N))  
-                if interpFlag:
-                    vorzPhys[i0,i1] = pseudo.chebint(vorzPhys[i0,i1], yArr)
-
-        if fft:
-            # If iFFT was used, then the structure of the matrices is different
-            Lx = 2.*np.pi/self.aArr[0]; Lz = 2.*np.pi/self.bArr[0]
-            L = self.aArr.size; M = self.bArr.size
-            xArr = np.arange(0., Lx, 2*L)
-            zArr = np.arange(-Lz/2., Lz/2., 2*M)
-            swirlStrength = np.concatenate((swirlStrength[:,M:], swirlStrength[:,:M]),axis=1)
-            if uField:
-                uPhys = np.concatenate((uPhys[:,M:], uPhys[:,:M]),axis=1)
-            if vorzField:
-                vorzPhys = np.concatenate((vorzPhys[:,M:], vorzPhys[:,:M]),axis=1)
 
 
         if fName is not None:
@@ -779,11 +701,11 @@ class flowField(np.ndarray):
             if vorzField: saveDict.update({'vorz':vorzPhys})
             if saveff: saveDict.update({'ffArr':self.copyArray()})
             savemat(fName, saveDict )
-        returnList = [swirlStrength]
-        if uField:  returnList.append(uPhys)
-        if vorzField: returnList.append(vorzPhys)
+        returnDict = {'swirl':swirlStrength, 'xArr':xArr, 'zArr':zArr, 'yArr':yArr}
+        if uField:  returnDict['uPhys']=uPhys
+        if vorzField: returnDict['vorzPhys'] = vorzPhys
         
-        return returnList
+        return returnDict
 
 
 
@@ -878,4 +800,64 @@ class flowField(np.ndarray):
             ffLong:     Appended field"""
         raise RuntimeError("This isn't ready yet... Ensure appendField can be used..")
         return
+
+
+def velGrad2swirl(velGrad):
+    """ Get swirl field from a (physical) velocity gradient tensor field
+    Inputs:
+        velGrad: velocity gradient tensor field of shape (nx, nz, ny, 3, 3)
+    Outputs:
+        swirl: swirl field of shape (nx, nz, ny)
+    """
+    a = velGrad # Makes the code simpler to write
+    assert velGrad.ndim == 5
+    
+    # Eigenvalues (s) of velGrad at each point are solutions to the cubic
+    # s^3 + ps + q = 0, where 
+    #       p = -0.5*trace(velGrad @ velGrad) is the second invariant (Q in Zhou et. al. 1999)
+    #       q = -det(velGrad) is the third invariant (R in Zhou et. al. 1999)
+    # The first invariant (P in Zhou et. al. 1999) is the divergence of velocity, and is zero
+
+    # Sorting out elements of the velocity gradient
+    a00=a[:,:,:,0,0]; a01=a[:,:,:,0,1]; a02=a[:,:,:,0,2]
+    a10=a[:,:,:,1,0]; a11=a[:,:,:,1,1]; a12=a[:,:,:,1,2]
+    a20=a[:,:,:,2,0]; a21=a[:,:,:,2,1]; a22=a[:,:,:,2,2]
+
+    # Second invariant; -0.5* trace(a@a):
+    p = -0.5*(   (a00**2 + a01*a10 + a02*a20)
+                +(a10*a01 + a11**2 + a12*a21)
+                +(a20*a02 + a21*a12 + a22**2)   )
+
+    # Third invariant; -det(a)
+    q = -1.*(    a00*(a11*a22-a12*a21)
+                -a01*(a10*a22-a12*a20)
+                +a02*(a10*a21-a11*a20)  )
+
+
+    # Now to find roots of the cubic in s, s^3 + ps +q = 0
+    # I use Cardano's method (see Wikipedia article)
+    # First, a few terms I need later
+    cbrt3 = 3.**(1./3.)
+    zeta = np.exp(2.j*np.pi/3.)     # a cube root of 1
+    zeta2= np.exp(4.j*np.pi/3.)     # and another 
+    
+    tmp = np.sqrt(( (q**2)/4. + (p**3)/27. ).astype(np.complex) ) 
+    u3 = -q/2.  + tmp 
+    # In case u3 has any zeros (which aren't good) due to p being 0, 
+    u3f = -q/2. - tmp
+    failInd = (u3==0.)
+    u3[failInd] = u3f[failInd]
+    # Now, u3 doesn't have any zeroes (unless both p and q are both zeros, which should't happen)
+    # 
+    u = u3**(1./3.)
+    v = -p/(3.*u)
+
+    cubeRoots = np.zeros( (a.shape[0], a.shape[1], a.shape[2],3), dtype=np.complex)
+    cubeRoots[:,:,:,0] = zeta*u  + zeta2*v
+    cubeRoots[:,:,:,1] = zeta2*u + zeta*v
+    cubeRoots[:,:,:,2] = u + v
+
+    swirl = cubeRoots.imag.max(axis=-1)
+    return swirl
+
 
