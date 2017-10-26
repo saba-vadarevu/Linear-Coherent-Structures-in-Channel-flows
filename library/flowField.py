@@ -261,7 +261,13 @@ class flowField(np.ndarray):
         else: bArr = bArrDefault 
         if len(args) > 2 : N = args[2]
         else: N = NDefault 
-        aArr = np.sort(aArr)
+       
+         
+        aArrPos = aArr[ np.where(aArr>=0.)[0]]
+        aArrNeg = aArr[ np.where(aArr<0.)[0]]
+        aArr = np.concatenate(( np.sort(aArrPos), np.sort(aArrNeg)    ))
+        # Need aArr to go as a0*[ 0, 1, 2, ..., L-1, L, -L+1, -L+2,...,-1]
+        
         bArr = np.sort(bArr)
         arrShape =  (aArr.size,bArr.size,3,N)
         obj = np.ndarray.__new__(cls,
@@ -585,6 +591,66 @@ class flowField(np.ndarray):
         
         return {'swirl':swirlStrength, 'xArr':xArr, 'yArr':yArr, 'zArr':zArr} 
 
+    def savePhysical(self, fieldList=['u'], fName=None, **kwargs):
+        """ 
+        Save physical fields to .mat files
+        Inputs:
+            fieldList:  List of strings corresponding to the fields to be saved. Acceptable strings are:
+                'u', 'v', 'w' for velocity components
+                'vorx', 'vory', 'vorz' for vorticity components
+                'swirl' for swirl
+                'div' for divergence
+            fName (=None): File name to save to
+            **kwargs:   these are sent to flowField.toPhysical(); refer to its docstring
+        Outputs:
+            None (just saving)
+        """
+        if fName is None: fName = 'testPhysFields.mat'
+
+        if not fName.endswith('.mat'): fName = fName.split('.')[0] + '.mat'
+
+        saveDict = {}
+        savedList = []
+
+        if 'u' in fieldList: 
+            physDict =  self.toPhysical(arr=self[:,:,0], **kwargs)
+            saveDict.update({'u':physDict['arrPhys']} )
+            savedList.append('u')
+        if 'v' in fieldList: 
+            physDict =  self.toPhysical(arr=self[:,:,1], **kwargs)
+            saveDict.update({'v':physDict['arrPhys']} )
+            savedList.append('v')
+        if 'w' in fieldList: 
+            physDict =  self.toPhysical(arr=self[:,:,2], **kwargs)
+            saveDict.update({'w':physDict['arrPhys']} )
+            savedList.append('w')
+        if 'swirl' in fieldList: 
+            physDict =  self.swirl(**kwargs)
+            saveDict.update({'swirl':physDict['swirl']} )
+            savedList.append('swirl')
+        if ('vorx' in fieldList) or ('vory' in fieldList) or ('vorz' in fieldList):
+            vorticity = self.curl()
+            if 'vorx' in fieldList:
+                physDict =  self.toPhysical(arr=vorticity[:,:,0], **kwargs)
+                saveDict.update({'vorx':physDict['arrPhys']} )
+                savedList.append('vorx')
+            if 'vory' in fieldList:
+                physDict =  self.toPhysical(arr=vorticity[:,:,1], **kwargs)
+                saveDict.update({'vory':physDict['arrPhys']} )
+                savedList.append('vory')
+            if 'vorz' in fieldList:
+                physDict =  self.toPhysical(arr=vorticity[:,:,2], **kwargs)
+                saveDict.update({'vorz':physDict['arrPhys']} )
+                savedList.append('vorz')
+        
+        if len(saveDict.keys()) == 0:
+            warn("Looks like there were no acceptable strings in fieldList:"+str(fieldList))
+        else:
+            saveDict.update({'xArr':physDict['xArr'], 'yArr':physDict['yArr'], 'zArr':physDict['zArr']})
+            savemat(fName, saveDict)
+            print("Saved fields   %s   to file %s"%(str(savedList), fName) )
+        
+        return
 
 
 
@@ -622,48 +688,26 @@ class flowField(np.ndarray):
         if (self.aArr.size == ff.aArr.size) and (self.aArr == ff.aArr).all():
             #assert not (self.bArr == ff.bArr).any()
             warn("I'm not checking for coinciding bArr; ensure it doesn't happen.")
-            bNew = np.sort( np.concatenate(( self.bArr, ff.bArr )) )
+            warn("Ensure fields are appended in kz as 0,1,..,M")
+            warn("VERY IMPORTANT: ORDERING OF kz in .appendField() is extremely important")
+            
+            bNew = np.concatenate(( self.bArr.flatten(), ff.bArr.flatten() )) 
+
             ffLong = flowField( self.aArr, bNew, self.N, flowDict = self.flowDict )
-            for i0 in range(ffLong.shape[0]):
-                a = self.aArr[i0]
-                i1self = 0; i1ff = 0
-                for i1 in range(ffLong.shape[1]):
-                    b = bNew[i1]
-                    # This is a little bit tricky 
-                    # I don't want to keep finding the index of b in self.bArr or ff.bArr
-                    # Since the bArrs in all 3 instances are sorted, just start by pointing
-                    #   at bIndex = 0 for all 3, then advance by 1 everytime there's a match
-                    if b in self.bArr:
-                        ffLong[i0,i1] = self[i0,i1self]
-                        i1self += 1
-                    elif b in ff.bArr:
-                        ffLong[i0,i1] = ff[i0,i1ff]
-                        i1ff += 1
-                    else:
-                        print("Something's wrong with appending at a,b=",a,b)
+            ffLong[:, :self.bArr.size] = self
+            ffLong[:, self.bArr.size:] = ff
         
         elif (self.bArr.size == ff.bArr.size) and (self.bArr == ff.bArr).all():
             #assert not (self.aArr == ff.aArr).any()
             warn("I'm not checking for coinciding aArr; ensure it doesn't happen.")
-            aNew = np.sort( np.concatenate(( self.aArr.flatten(), ff.aArr )) )
+            warn("Ensure fields are appended in kx as 0,1,..,L,-L+1,..,-1")
+            warn("VERY IMPORTANT: ORDERING OF kx in .appendField() is extremely important")
+            
+            aNew = np.concatenate(( self.aArr.flatten(), ff.aArr.flatten() )) 
+
             ffLong = flowField( aNew, self.bArr, self.N, flowDict = self.flowDict )
-            for i1 in range(ffLong.shape[1]):
-                b = self.bArr[i1]
-                i0self = 0; i0ff = 0
-                for i0 in range(ffLong.shape[0]):
-                    a = aNew[i0]
-                    # This is a little bit tricky 
-                    # I don't want to keep finding the index of a in self.aArr or ff.aArr
-                    # Since the aArrs in all 3 instances are sorted, just start by pointing
-                    #   at aIndex = 0 for all 3, then advance by 1 everytime there's a match
-                    if a in self.aArr:
-                        ffLong[i0,i1] = self[i0self,i1]
-                        i0self += 1
-                    elif a in ff.aArr:
-                        ffLong[i0,i1] = ff[i0ff,i1]
-                        i0ff += 1
-                    else:
-                        print("Something's wrong with appending at a,b=",a,b)
+            ffLong[:self.aArr.size] = self
+            ffLong[self.aArr.size:] = ff
         else:
             self.messyAppendField(ff)
         return ffLong
@@ -694,7 +738,7 @@ def _spec2physIfft(arr, padded=False):
     else: nx = 2*L; nz = 2*M
 
     scaleFactor = nx * nz    # times something related to a0,b0??
-    physField =  scaleFactor * np.fft.irfft2( arrExt, s=(nx, nz),axes=(0,1) )  
+    physField =  scaleFactor * np.fft.irfft2( arr, s=(nx, nz),axes=(0,1) )  
     
     # This field goes from 0 to Lz in z. I want to to go from -Lz/2 to Lz/2(exclusive):
     physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
