@@ -555,33 +555,33 @@ class flowField(np.ndarray):
         vx = tmpArr[:,:,1]
         wx = tmpArr[:,:,2]
 
-        uxDict = _spec2physIfft( ux, **kwargs)
+        uxDict = self.toPhysical(arr= ux, **kwargs)
         xArr = uxDict['xArr']; yArr = uxDict['yArr']; zArr = uxDict['zArr']
         uxPhys = uxDict['arrPhys']
         # The shapes of velGrad and swirlStrength depend on parameters  x0,x1,z0,z1 in **kwargs
         velGrad = np.zeros( (uxPhys.shape[0], uxPhys.shape[1], uxPhys.shape[2], 3,3) )
         velGrad[:,:,:,0,0] = uxPhys 
-        velGrad[:,:,:,0,1] = _spec2physIfft( uy, **kwargs)['arrPhys']
-        velGrad[:,:,:,0,2] = _spec2physIfft( uz, **kwargs)['arrPhys']        
-        ux = None; uy = None; uz = None # Just in case ux and others aren't just pointers 
+        velGrad[:,:,:,1,0] = self.toPhysical(arr= vx, **kwargs)['arrPhys']
+        velGrad[:,:,:,2,0] = self.toPhysical(arr= wx, **kwargs)['arrPhys']        
+        ux = None; vx = None; wx = None # Just in case ux and others aren't just pointers 
 
         tmpArr = self.ddy()
         uy = tmpArr[:,:,0]
         vy = tmpArr[:,:,1]
         wy = tmpArr[:,:,2]
-        velGrad[:,:,:,1,0] = _spec2physIfft( vx, **kwargs)['arrPhys']
-        velGrad[:,:,:,1,1] = _spec2physIfft( vy, **kwargs)['arrPhys']
-        velGrad[:,:,:,1,2] = _spec2physIfft( vz, **kwargs)['arrPhys']
-        vx = None; vy = None; vz = None
+        velGrad[:,:,:,0,1] = self.toPhysical(arr= uy, **kwargs)['arrPhys']
+        velGrad[:,:,:,1,1] = self.toPhysical(arr= vy, **kwargs)['arrPhys']
+        velGrad[:,:,:,2,1] = self.toPhysical(arr= wy, **kwargs)['arrPhys']
+        uy = None; vy = None; wy = None
 
         tmpArr = self.ddz()
         uz = tmpArr[:,:,0]
         vz = tmpArr[:,:,1]
         wz = tmpArr[:,:,2]
-        velGrad[:,:,:,2,0] = _spec2physIfft( wx, **kwargs)['arrPhys']
-        velGrad[:,:,:,2,1] = _spec2physIfft( wy, **kwargs)['arrPhys']
-        velGrad[:,:,:,2,2] = _spec2physIfft( wz, **kwargs)['arrPhys']
-        wx = None; wy = None; wz = None
+        velGrad[:,:,:,0,2] = self.toPhysical(arr= uz, **kwargs)['arrPhys']
+        velGrad[:,:,:,1,2] = self.toPhysical(arr= vz, **kwargs)['arrPhys']
+        velGrad[:,:,:,2,2] = self.toPhysical(arr= wz, **kwargs)['arrPhys']
+        uz = None; vz = None; wz = None
         tmpArr = None
 
         # Ifft needs to be scaled by this factor to kinda sorta account for using a finite number of Fourier modes
