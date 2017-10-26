@@ -444,86 +444,93 @@ class flowField(np.ndarray):
         """Integrates v[nd=j]*v[nd=j].conjugate() along x_j, sums across j=1,..,self.nd , and takes its square-root"""
         return np.sqrt(self.dot(self))
 
-    def toPhysical(self, arr=None, xArr=None, zArr=None, N=None, fName=None, symm='even', ySpace='linear'):
+    def toPhysical(self, arr=None, x0=None, x1=None, z0=None, z1=None, N=None, symm='even', ySpace='linear', padded=False):
+        """
+        Get physical fields from spectral
+
+
+        """
         if arr is None:
             arr = self.copyArray()[:,:,0]
             warn("arr is not supplied to 'toPhysical', using streamwise velocity...")
-        else: assert arr.shape == (self.aArr.size, self.bArr.size, 1, self.N)
-        xShift = np.amax(self.U) * self.flowDict['t']
-        if xArr is None:
-            a0 = self.aArr[0]
-            if a0 == 0.: a0 = self.aArr[1]
-            Lx = 2.*np.pi/a0
-            xArr = xShift + np.linspace(0., Lx, 64)
-            print("xArr is not supplied... Using 64 points in %.3g + [0,%.3g]"%(xShift,Lx))
-        else:
-            assert xArr.ndim == 1
-            if not ( xArr[0] <= xShift <= xArr[-1] ):
-                print("xArr doesn't contain xShift = %.3g.. You sure it's okay?"%xShift)
-        if zArr is None:
-            b0 = self.bArr[0]
-            if b0 == 0.: b0 = self.bArr[1]
-            Lz = 2.*np.pi/b0
-            zArr = np.linspace(-Lz/2, Lz,64) 
-            print("zArr is not supplied... Using 128 points in [%.3g,%.3g]"%(-Lz/2, Lz/2))
-        else:
-            assert zArr.ndim ==1
-        if N is None:
-            N = self.N
-        if ySpace == 'linear':
-            yArr = np.linspace(1., -1., N+2)[1:-1]
-            interpFlag = True
-        elif N == self.N: 
-            yArr = self.y; interpFlag = False
-        else:
-            yArr = pseudo.chebdif(N,1)[0]
-            interpFlag = True
+        else: assert (arr.shape == (self.aArr.size, self.bArr.size,self.N)) or \
+                (arr.shape == (self.aArr.size, self.bArr.size,1,self.N))
 
-        if self.aArr[0] == 0:
-            warn("Ignoring all a=0 modes in toPhysical.")
-            arr[0] = 0.
-        if self.bArr[0] == 0:
-            warn("Ignoring all b=0 modes in toPhysical.")
-            arr[:,0] = 0.
-
-        arrPhys = np.zeros((xArr.size, zArr.size, yArr.size)) 
-        def _spec2phys(x,z,someArr,symm='even'):
-            # symm = even refers to f(z) = f(-z), 
-            #   and the other (symm=odd) refers to f(z) = -f(-z)
-            # Even symm holds for ux, uy, vx, vy, wz
-            # Odd symm holds for uz, vz, wx, wy
-            if symm == 'even':
-                physArr = 4.* np.sum( np.sum(
-                    np.cos(bArr * z) * np.real( someArr * np.exp(1.j*aArr*x) ),
-                    axis = 1), axis = 0)
-            else:
-                physArr = -4.* np.sum( np.sum(
-                    np.sin(bArr * z) * np.imag( someArr * np.exp(1.j*aArr*x) ),
-                    axis = 1), axis = 0)
-            return np.real(physArr)
         
-        for i0 in range(xArr.size):
-            for i1 in range(zArr.size):
-                tmpPhys = _spec2phys(xArr[i0],zArr[i1],arr, symm=symm)
-                if interpFlag:
-                    arrPhys[i0,i1] = pseudo.chebint(tmpPhys, yArr)
-                else:
-                    arrPhys[i0,i1] = tmpPhys
+        L = self.aArr.size; M = self.bArr.size 
+        if padded: nx = 4*L; nz = 4*M
+        else: nx = 2*L; nz = 2*M
 
-        if fName is not None:
-            if not (fName[-4:] =='.mat'): fName = fName + '.mat'
-            flowDict = self.flowDict
-            saveDict = {'arrPhys':arrPhys,'xArr':xArr,'zArr':zArr,'yArr':yArr,\
-                    'aArr':self.aArr, 'bArr':self.bArr,'N':self.N,\
-                    'Re':flowDict['Re'], 'eddy':flowDict['eddy'], 't':flowDict['t'],\
-                    'flowState':flowDict['flowState']}
-            savemat(fName, saveDict )
-        return arrPhys
+        a0 = self.aArr[0]; b0 = self.bArr[0]
+        if a0 == 0.: a0 = self.aArr[1]
+        if b0 == 0.: b0 = self.bArr[1]
+
+        # Ensure aArr and bArr are integral multiples
+        if not (self.aArr % a0 == 0.).all():
+            print("aArr doesn't seem to be integral multiples. Have a look")
+            print("a0 is", a0)
+            print("aArr/a0 is ", self.aArr/a0)
+        if not (self.bArr % b0 == 0.).all():
+            print("bArr doesn't seem to be integral multiples. Have a look")
+            print("b0 is", b0)
+            print("bArr/b0 is ", self.bArr/b0)
+       
+        # Grids in x, z, and y
+        # Worry about x0, x1, z0, z1 after the iFFT
+        Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        xArr = np.linspace(0., Lx, nx+1)[:-1]
+        zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
+        interpFlag = True
+        if N is not None:
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., N+2)[1:-1]
+            else: yArr = pseudo.chebdif(N,1)[0]
+        else:
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., self.N+2)[1:-1]
+            else:
+                yArr = self.y.copy()
+                interpFlag = False
+
+        # Including (a,0) and (0,b) is a bit of a pain. For now, I'll ignore them 
+        a0bool = (self.aArr[0] == 0.)
+        b0bool = (self.bArr[0] == 0.)
+        def _seta0b0(someArr):
+            if a0bool: someArr[0] = 0.
+            if b0bool: someArr[:,0] = 0.
+            return
+        _seta0b0(arr)     # Get rid of (a,0) and (0,b) modes if they're in there
+        
+        
+        # Let's start working on truncating the domain according to x0,x1,z0,z1
+        if (x0 is None) or (x0<0.): x0ind = 0
+        else:   x0ind = np.where(xArr <= x0)[0][-1]     # Index of largest entry of xArr <= x0
+        if (x1 is None) or (x1>xArr[-1]): x1ind = nx
+        else:   x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
+        
+        if (z0 is None) or (z0< -Lz/2.): z0ind = 0
+        else:   z0ind = np.where(zArr <= z0)[0][-1]     # See above
+        if (z1 is None) or (z1> zArr[-1]): z1ind = nz
+        else:   z1ind = np.where(zArr >= z0)[0][0] + 1
+        
+        nx1 = x1ind - x0ind
+        nz1 = z1ind - z0ind
+        xArr = xArr[x0ind:x1ind]; zArr = zArr[z0ind:z1ind]
+
+        arrPhys = _spec2physIfft( arr, symm=symm, padded=padded)[x0ind:x1ind, z0ind:z1ind]
+        arrPhys *= (1./(2.*np.pi)**2) * (a0*b0)
+        if interpFlag:
+            for i0 in range(nx1):
+                for i1 in range(nz1):
+                    arrPhys[i0,i1] = pseudo.chebint(arr[i0,i1], yArr)
+
+        return {'arrPhys':arrPhys, 'xArr':xArr, 'zArr':zArr, 'yArr':yArr}
 
 
 
     def swirl(self, x0=None, x1=None, z0=None, z1=None, N=None, fName=None, padded=True,
-            uField=False,vorzField=False, saveff=False, ySpace='linear'):
+            uField=False, uSymm='odd', vorzField=False, vorzSymm='odd',
+            saveff=False, ySpace='linear'):
         """ Returns the swirling strength for the field in physical space
         IMPORTANT: aArr and bArr must be (positive) integral multiples of aArr[0] and bArr[0]
         This function runs only on numpy's ifft; the custom ifft is now dropped
@@ -610,32 +617,6 @@ class flowField(np.ndarray):
         if vorzField:
             vorzSpec = vx - uy
 
-        def _spec2physIfft(arr, symm='even',padded=True):
-            # symm decides how I should extend the Fourier coeffs in the first quadrant
-            #   of the a-b plane to the second quadrant.
-            # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
-            # For odd  symm, I extend as f_{-a,b} = conj( f_{a,-b} ) =-conj( f_{a,b} )
-            L = arr.shape[0]; M = arr.shape[1]; N= arr.shape[2]
-            assert L > 1, "Use _spec2phys() instead of _spec2physIfft() for such small cases"
-            arrExt = np.zeros( (2*L, M+1,yArr.size), dtype=np.complex)
-            # numpy's ifft needs coeffs for a to go as 0,1,..,L, -L+1,-L+2,...,-1
-            #       and for b to go as 0,1,..,M
-            arrExt[1:L+1, 1:] = arr
-            # Apparently, the largest mode must have real coefficients
-            arrExt[L] = np.real(arrExt[L]); arrExt[:,M] = np.real(arrExt[:,M])
-            # For L = 3, a goes as [0,1,2,3,-2,-1]
-            if symm == 'even':
-                arrExt[ :L:-1,1:] = np.conj( arr[ :L-1,: ] ) 
-            if symm == 'odd':
-                arrExt[ :L:-1,1:] =-np.conj( arr[ :L-1,: ] ) 
-
-            # The array is now ready to be used for numpy's rifft2
-            scaleFactor = nx * nz    # times something related to a0,b0??
-            physField =  scaleFactor*np.fft.irfft2( arrExt, s=(nx, nz),axes=(0,1) )  
-            
-            # This field goes from 0 to Lz in z. I want to to go from -Lz/2 to Lz/2:
-            physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
-            return physField
 
 
         # Let's start working on truncating the domain according to x0,x1,z0,z1
@@ -668,16 +649,21 @@ class flowField(np.ndarray):
         velGrad[:,:,:,2,1] = _spec2physIfft( wy, symm='odd' , padded=padded)[x0ind:x1ind, z0ind:z1ind]
         velGrad[:,:,:,2,2] = _spec2physIfft( wz, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
         wx = None; wy = None; wz = None
+
+        # Ifft needs to be scaled by this factor to kinda sorta account for using a finite number of Fourier modes
+        velGrad *= (1./(2.*np.pi)**2) * (a0 * b0)
         
         swirlStrength = velGrad2swirl(velGrad)
 
         velGrad = None  
 
         if uField:
-            uPhys = _spec2physIfft( uSpec, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+            uPhys = _spec2physIfft( uSpec, symm=uSymm, padded=padded)[x0ind:x1ind, z0ind:z1ind]
+            uPhys *= (1./(2.*np.pi)**2) * (a0 * b0)
 
         if vorzField:
-            vorzPhys = _spec2physIfft( vorzSpec, symm='even', padded=padded)[x0ind:x1ind, z0ind:z1ind]
+            vorzPhys = _spec2physIfft( vorzSpec, symm=vorzSymm, padded=padded)[x0ind:x1ind, z0ind:z1ind]
+            vorzPhys *= (1./(2.*np.pi)**2) * (a0 * b0)
 
         if interpFlag:
             for i0 in range(nx1):
@@ -801,6 +787,37 @@ class flowField(np.ndarray):
         raise RuntimeError("This isn't ready yet... Ensure appendField can be used..")
         return
 
+
+
+def _spec2physIfft(arr, symm='even',padded=True):
+    # symm decides how I should extend the Fourier coeffs in the first quadrant
+    #   of the a-b plane to the second quadrant.
+    # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
+    # For odd  symm, I extend as f_{-a,b} = conj( f_{a,-b} ) =-conj( f_{a,b} )
+    L = arr.shape[0]; M = arr.shape[1]; N= arr.shape[2]
+    assert L > 1, "Use _spec2phys() instead of _spec2physIfft() for such small cases"
+    arrExt = np.zeros( (2*L, M+1,N), dtype=np.complex)
+    # numpy's ifft needs coeffs for a to go as 0,1,..,L, -L+1,-L+2,...,-1
+    #       and for b to go as 0,1,..,M
+    arrExt[1:L+1, 1:] = arr
+    # Apparently, the largest mode must have real coefficients
+    arrExt[L] = np.real(arrExt[L]); arrExt[:,M] = np.real(arrExt[:,M])
+    # For L = 3, a goes as [0,1,2,3,-2,-1]
+    if symm == 'even':
+        arrExt[ :L:-1,1:] = np.conj( arr[ :L-1,: ] ) 
+    if symm == 'odd':
+        arrExt[ :L:-1,1:] =-np.conj( arr[ :L-1,: ] ) 
+
+    # The array is now ready to be used for numpy's rifft2
+    if padded: nx = 4*L; nz = 4*M
+    else: nx = 2*L; nz = 2*M
+
+    scaleFactor = nx * nz    # times something related to a0,b0??
+    physField =  scaleFactor * np.fft.irfft2( arrExt, s=(nx, nz),axes=(0,1) )  
+    
+    # This field goes from 0 to Lz in z. I want to to go from -Lz/2 to Lz/2:
+    physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
+    return physField
 
 def velGrad2swirl(velGrad):
     """ Get swirl field from a (physical) velocity gradient tensor field
