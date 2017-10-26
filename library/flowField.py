@@ -583,9 +583,6 @@ class flowField(np.ndarray):
         velGrad[:,:,:,2,2] = self.toPhysical(arr= wz, **kwargs)['arrPhys']
         uz = None; vz = None; wz = None
         tmpArr = None
-
-        # Ifft needs to be scaled by this factor to kinda sorta account for using a finite number of Fourier modes
-        velGrad *= (1./(2.*np.pi)**2) * (a0 * b0)
         
         swirlStrength = velGrad2swirl(velGrad)
         
@@ -647,6 +644,7 @@ class flowField(np.ndarray):
             warn("Looks like there were no acceptable strings in fieldList:"+str(fieldList))
         else:
             saveDict.update({'xArr':physDict['xArr'], 'yArr':physDict['yArr'], 'zArr':physDict['zArr']})
+            saveDict.update(self.flowDict)
             savemat(fName, saveDict)
             print("Saved fields   %s   to file %s"%(str(savedList), fName) )
         
