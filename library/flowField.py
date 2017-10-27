@@ -449,17 +449,18 @@ class flowField(np.ndarray):
         """Integrates v[nd=j]*v[nd=j].conjugate() along x_j, sums across j=1,..,self.nd , and takes its square-root"""
         return np.sqrt(self.dot(self))
 
-    def toPhysical(self, arr=None, x0=None, x1=None, z0=None, z1=None, N=None, ySpace='cheb', padded=False):
+    def toPhysical(self, arr=None, x0=None, x1=None, z0=None, N=None, ySpace='cheb', padded=False):
         """
         Get physical fields from spectral
         Inputs:
             arr:    Any array of spectral coefficients for a scalar of shape consistent with self
             keyword arguments:
-            x0, x1, z0, z1; all None by default
+            x0, x1, z0; all None by default
                 If they're not specified, use domain x in [0,Lx], z in [-Lz/2,Lz/2]
-                If any of them is specified, truncate domain to [x0,x1] , [z0,z1]
-            N (=None):  If set, interpolate to a different wall-normal grid
-            padded (=True): pad x-z modes to twice the number to get finer physical field
+                If any of them is specified, truncate domain to [x0,x1] , [z0,-z0]
+                Allow x0 to go in [-Lx/2., 0] if needed, coz sometimes the full structure has some back-propogation
+            N (=None):  If set to a value other than self.N, interpolate to a different wall-normal grid
+            padded (=False): pad x-z modes to twice the number to get finer physical field
             ySpace (='cheb'): If 'cheb', keep data on Chebyshev grid
                                 If 'linear', interpolate to uniformly spaced points
         Outputs:
@@ -513,22 +514,50 @@ class flowField(np.ndarray):
                 interpFlag = False
 
         
-        # Let's start working on truncating the domain according to x0,x1,z0,z1
-        if (x0 is None) or (x0<0.): x0ind = 0
-        else:   x0ind = np.where(xArr <= x0)[0][-1]     # Index of largest entry of xArr <= x0
-        if (x1 is None) or (x1>xArr[-1]): x1ind = nx
-        else:   x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
-        
-        if (z0 is None) or (z0< -Lz/2.): z0ind = 0
-        else:   z0ind = np.where(zArr <= z0)[0][-1]     # See above
-        if (z1 is None) or (z1> zArr[-1]): z1ind = nz
-        else:   z1ind = np.where(zArr >= z0)[0][0] + 1
-        
-        nx1 = x1ind - x0ind
-        nz1 = z1ind - z0ind
-        xArr = xArr[x0ind:x1ind]; zArr = zArr[z0ind:z1ind]
+        # Let's start working on truncating the domain according to x0,x1,z0
+        if (z0 is None) or (z0>0.) or (z0 < -Lz/2.): z0 = zArr[0]
+        z1 = -z0 - ( zArr[1] - zArr[0] )    # +Lz/2. is excluded, so...
+        z0ind = np.where(zArr <= z0)[0][-1]     # Index of largest entry of zArr <= z0 
+        z1ind = np.where(zArr >= z1)[0][0] + 1  # Index of (second) smallest entry of zArr >= z0
+        print("z0,z1,z0ind,z1ind:",z0,z1,z0ind,z1ind)
+        foldInX = False     
+        # This flag tells me if I need to rearrange the x-dimension, when x0 < 0
+        if (x0 is None) or (x0 > Lx) : x0 = xArr[0]
+        if x0 < 0.:
+            # This is the tricky bit
+            x0ind = np.where(xArr <= -x0)[0][-1]     
+            x0ind = max(x0ind,1)    # Ensure x0ind is at least 1 to avoid issues later
+            # Say x0 is -0.3. 
+            # I'll count the number of entries to +0.3 instead of -0.3, 
+            #   which are the same because the grid is uniform.
+            # Then, I'll get so many indices from the end (near Lx) and move them to the start
+            foldInX = True
+        else:
+            x0ind = np.where(xArr <= x0)[0][-1]     
 
-        arrPhys = _spec2physIfft( arr, padded=padded )[x0ind:x1ind, z0ind:z1ind]
+        if (x1 is None) or (x1<x0) or (x1>Lx): x1 = xArr[-1] 
+        # This is enough whenever x0 >= 0, but to account for x0<0,
+        x1 = min(x1, xArr[-1] + x0)
+        x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
+        
+        if not foldInX: 
+            nx1 = x1ind - x0ind
+            nz1 = z1ind - z0ind
+            xArr = xArr[x0ind:x1ind]; zArr = zArr[z0ind:z1ind]
+        else:
+            xArr = np.concatenate(( -Lx + xArr[-x0ind:] , xArr[:x1ind] ))
+            zArr = zArr[z0ind:z1ind]
+            nx1 = xArr.size; nz1 = zArr.size
+        
+        arrPhysUnfolded = _spec2physIfft( arr, padded=padded )[:, z0ind:z1ind]
+        if not foldInX:
+            # The simple case:
+            arrPhys = arrPhysUnfolded[x0ind:x1ind]
+        else:
+            # The less simple case:
+            arrPhys = np.concatenate(( 
+                arrPhysUnfolded[-x0ind:], arrPhysUnfolded[:x1ind] ), axis=0 )
+
         arrPhys *= (1./(2.*np.pi)**2) * (a0*b0)
         if interpFlag:
             for i0 in range(nx1):
