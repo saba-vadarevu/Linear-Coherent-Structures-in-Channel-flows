@@ -9,6 +9,7 @@ import ops
 import pseudo
 from warnings import warn
 from scipy.linalg import expm, solve_sylvester
+from scipy.sparse.linalg import expm_multiply
 
 def impulseVec(a,b,**kwargs):
     """ Generate 3C impulse vector Fs (see sec. 10.1 of Jovanovic's thesis) from wall=normal profile 'fs' 
@@ -92,7 +93,7 @@ def impulseVec(a,b,**kwargs):
 
 
 
-def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=None,printOut=False):
+def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=None,printOut=False, expmNew=False):
     """ Returns the Fourier coefficients (and energy) for u,v,w at a specified Fourier mode and time.
     Inputs:
         a, b    :      Streamwise and spanwise wavenumbers
@@ -156,24 +157,66 @@ def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=N
     if printOut:
         print("Computing impulse response for times ",tArr)
 
-    # At each time 't', and for 4 impulse cases (x, y, z, xyz), 3 components and 3 energies
-    coeffArr = np.zeros( (tArr.size, 4, 3*N), dtype=np.complex )
-    energyArr = np.zeros( (tArr.size,4, 4), dtype=np.complex)
-    
-    for i0 in range(tArr.size):
-        t = tArr[i0]
-        expFactor = C @ expm(t*A)
-        expFactorAdj = expm(t*Aadj) @ Cadj
-        for i1 in range(4):
-            FsVec = Fs[i1].reshape((2*N,1))
-            FsAdjVec = FsAdj[i1].reshape((1,2*N))
-            coeffs = ( expFactor @ FsVec ).flatten()
-            energy = (FsAdjVec @ expFactorAdj ).flatten() * coeffs  # (Weighted) pointwise energy in mode for u, v, w
-            coeffArr[i0,i1] = coeffs 
-            energyArr[i0,i1,0] = np.sum( energy[   : N ]   )
-            energyArr[i0,i1,1] = np.sum( energy[ N :2*N]   )
-            energyArr[i0,i1,2] = np.sum( energy[2*N:   ]   )
-            energyArr[i0,i1,3] = np.sum( energy    )
+   
+    if not expmNew:
+        # At each time 't', and for 4 impulse cases (x, y, z, xyz), 3 components and 3 energies
+        coeffArr = np.zeros( (tArr.size, 4, 3*N), dtype=np.complex )
+        for i0 in range(tArr.size):
+            t = tArr[i0]
+            expFactor = C @ expm(t*A)
+            #expFactorAdj = expm(t*Aadj) @ Cadj
+            for i1 in range(4):
+                FsVec = Fs[i1].reshape((2*N,1))
+                #FsAdjVec = FsAdj[i1].reshape((1,2*N))
+                coeffs = ( expFactor @ FsVec ).flatten()
+                #energy = (FsAdjVec @ expFactorAdj ).flatten() * coeffs  # (Weighted) pointwise energy in mode for u, v, w
+                coeffArr[i0,i1] = coeffs 
+                #energyArr[i0,i1,0] = np.sum( energy[   : N ]   )
+                #energyArr[i0,i1,1] = np.sum( energy[ N :2*N]   )
+                #energyArr[i0,i1,2] = np.sum( energy[2*N:   ]   )
+                #energyArr[i0,i1,3] = np.sum( energy    )
+    elif False:
+        # Using Scipy.sparse.expm_multiply is written for exactly this sort of implementation
+        #   It's callled as so:
+        # expm_multiply( A, B, startTime, endTime, numTimes ) 
+        #   to compute e^{A tArr} B, where tArr = np.linspace(startTime,endTime,numTimes)
+        # The output is of shape (tArr.size, A.shape[0], B.shape[1])
+        # I have defined B=Fs to be shape (4, 2*N)
+        # And I want the coeffs to be shape (tArr.size, 4, 3*N)
+        # The matrix multiplication, @, for 3d arrays broadcasts by assuming 
+        #   the 3d array is a stack containing matrices living in the last 2 dimensions.
+        # To get the broadcasting to work: 
+        coeffArrSwapped = C @ expm_multiply(A, Fs.T, start=tArr[0],stop=tArr[-1],num=tArr.size)
+        warn("expm_multiply() computes over uniformly spaced times. Don't use this if times aren't uniform.")
+        warn("expm_multiply() is a lot more slower (around 20x) than just using expm(), possibly because it isn't multicore... Don't use this.")
+        # Shapes are: C_3Nx2N, A_2Nx2N, FsVec_4x2N, FsVec.T_2Nx4, (e^{A tArr} FsVec.T)_Px2Nx4,
+        #   where P = tArr.size=num in the argument to expm_multiply()
+        # coeffArrSwapped is shape P x 3N x 4, swap the last 2 dims as
+        coeffArr = np.swapaxes( coeffArrSwapped, axis1=1, axis2=2)
+        # to have coeffArr in shape P x 4 x 3N
+        
+        tArrNew = np.linspace(tArr[0], tArr[-1], tArr.size)
+        if not (tArr == tArrNew).all(): 
+            print("tArr has been changed as expm_multiply() is being used")
+            tArr = tArrNew
+    else:
+        # At each time 't', and for 4 impulse cases (x, y, z, xyz), 3 components and 3 energies
+        coeffArr = np.zeros( (tArr.size, 4, 3*N), dtype=np.complex )
+        #expFactor = C @ expm(t*A)
+        evals, evecs = np.linalg.eig(A)
+        evecsInv = np.linalg.solve(evecs, np.identity(A.shape[0],dtype=np.complex) )
+        fac1 = C @ evecs
+        fac2 = evecsInv @ Fs.T
+        for i0 in range(tArr.size):
+            t = tArr[i0]
+            coeffArr[i0] = (fac1 @ np.diag( np.exp(evals * t) ) @ fac2 ).T
+
+    # Don't really need the adjoints and all that to compute energy since coeffArr are for [u,v,w]. A plain old chebnorm is enough
+    energyArr = np.zeros((tArr.size, 4,4))
+    w = pseudo.clencurt(N).reshape((1,1,1,N))
+    energyArr[:,:,:3] = np.sum( w * ( coeffArr.reshape((tArr.size,4,3,N)) * coeffArr.conj().reshape((tArr.size, 4, 3, N))  ), axis=-1 )
+    energyArr[:,:,3] = np.sum(energyArr[:,:,:3], axis=-1 )
+
     
     outDict = {'a':a, 'b':b, 'tArr':tArr, \
             'N':linInst.N, 'Re':linInst.Re, 'turb':linInst.flowState, \

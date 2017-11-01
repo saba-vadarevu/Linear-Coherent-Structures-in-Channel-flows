@@ -487,11 +487,13 @@ class flowField(np.ndarray):
         if b0 == 0.: b0 = self.bArr[1]
 
         # Ensure aArr and bArr are integral multiples
-        if not (self.aArr % a0 == 0.).all():
+        aArrIdeal = a0 * np.concatenate(( np.linspace(0,L,L+1), np.linspace(-L+1, -1, L-1) ))
+        bArrIdeal = b0 * np.linspace(0,M,M+1)
+        if not ( np.linalg.norm(self.aArr- aArrIdeal) < 1.e-09 ) :
             print("aArr doesn't seem to be integral multiples. Have a look")
             print("a0 is", a0)
             print("aArr/a0 is ", self.aArr/a0)
-        if not (self.bArr % b0 == 0.).all():
+        if not ( np.linalg.norm(self.bArr- bArrIdeal) < 1.e-09 ) :
             print("bArr doesn't seem to be integral multiples. Have a look")
             print("b0 is", b0)
             print("bArr/b0 is ", self.bArr/b0)
@@ -519,7 +521,6 @@ class flowField(np.ndarray):
         z1 = -z0 - ( zArr[1] - zArr[0] )    # +Lz/2. is excluded, so...
         z0ind = np.where(zArr <= z0)[0][-1]     # Index of largest entry of zArr <= z0 
         z1ind = np.where(zArr >= z1)[0][0] + 1  # Index of (second) smallest entry of zArr >= z0
-        print("z0,z1,z0ind,z1ind:",z0,z1,z0ind,z1ind)
         foldInX = False     
         # This flag tells me if I need to rearrange the x-dimension, when x0 < 0
         if (x0 is None) or (x0 > Lx) : x0 = xArr[0]
