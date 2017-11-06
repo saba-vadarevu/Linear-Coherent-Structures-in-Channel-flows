@@ -53,6 +53,46 @@ NDefault = 251
 def getDefaultDict():
     return defaultDict.copy()
 
+def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
+    """ 
+    Call impulseResponse, but with aArr and bArr split into 'na' and 'nb' parts
+    """
+    if not (na==1): aStep = np.ceil(aArr.size/na)
+    else: aStep = aArr.size
+    aStep = int(aStep)
+    if not (nb==1): bStep = np.ceil(bArr.size/ba)
+    else: bStep = bArr.size
+    bStep = int(bStep)
+    aArrFull = aArr.copy()
+    bArrFull = bArr.copy()
+
+    if not ('fPrefix' in kwargs):
+        warn("You have to supply fPrefix, or the fields aren't going to be saved")
+    else:
+        fPrefix0 = kwargs.pop('fPrefix')
+        fFlag = True
+
+    for aInd in range(na):
+        aArr = aArrFull[ aInd*aStep : (aInd+1)*aStep ]
+        if (not (na==1)) and fFlag:
+            aPrefix = '_aPart%d_%d'%(aInd+1,na)
+        else: 
+            aPrefix = ''
+
+        for bInd in range(nb):
+            bArr = bArrFull[bInd*bStep : (bInd+1)*bStep]
+            if (not (nb==1)) and fFlag:
+                bPrefix = '_bPart%d_%d'%(bInd+1,nb)
+            else:
+                bPrefix = ''
+            fPrefix = fPrefix0 + aPrefix + bPrefix 
+            impulseDict = impulseResponse(aArr, bArr, N, tArr, fPrefix= fPrefix,**kwargs)
+
+    return impulseDict
+
+            
+
+    
 
 def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, fPrefix=None):
     """
@@ -88,19 +128,20 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
         turb = True
     else: turb = False
     eddy = flowDict.get('eddy',False)
-    print("Computing impulse response at tArr, aArr, bArr:",tArr,aArr, bArr)
+    #print("Computing impulse response at tArr, aArr, bArr:",tArr,aArr, bArr)
     print("Flow parameters are (Re,N,eddy,turb):",(Re,N,eddy,turb))
     linInst = ops.linearize(N=N, flowClass='channel',Re=Re,eddy=eddy,turb=turb)
 
     # Create flowField instances for each t in tArr, one each for response to x, y, and z impulse
-    FxList = []; FyList = []; FzList = []
+    FxList = []; FyList = []; FzList = []; FxyzList = []
     for t in tArr:
         flowDict.update({'t':t})
         ffx = flowField(aArr, bArr,N, flowDict=flowDict)
-        ffy = ffx.copy(); ffz = ffx.copy()
+        ffy = ffx.copy(); ffz = ffx.copy(); ffxyz = ffx.copy()
         FxList.append(ffx)
         FyList.append(ffy)
         FzList.append(ffz)
+        FxyzList.append(ffxyz)
 
     for i0 in range(aArr.size):
         a = aArr[i0]
@@ -119,6 +160,8 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
                 ff[i0,i1] = responseDict['coeffArr'][tInd,1].reshape((3,N))
                 ff = FzList[tInd]
                 ff[i0,i1] = responseDict['coeffArr'][tInd,2].reshape((3,N))
+                ff = FxyzList[tInd]
+                ff[i0,i1] = responseDict['coeffArr'][tInd,3].reshape((3,N))
     
     # Save each ff instance if fPrefix is supplied;
     #   Append _Fx_txxxx.mat to the prefix
@@ -127,13 +170,15 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
         for tInd in range(tArr.size):
             t = tArr[tInd]
             ff = FxList[tInd] 
-            ff.saveff(fPrefix+"_Fx_t%05d"%(100.*t))
+            ff.saveff(fPrefix+"_Fx_t%05d"%(round(100.*t)))
             ff = FyList[tInd] 
-            ff.saveff(fPrefix+"_Fy_t%05d"%(100.*t))
+            ff.saveff(fPrefix+"_Fy_t%05d"%(round(100.*t)))
             ff = FzList[tInd] 
-            ff.saveff(fPrefix+"_Fz_t%05d"%(100.*t))
+            ff.saveff(fPrefix+"_Fz_t%05d"%(round(100.*t)))
+            ff = FxyzList[tInd]
+            ff.saveff(fPrefix+"_Fxyz_t%05d"%(round(100.*t)))
     
-    return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[1]}
+    return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[0],'FxyzResponse':FxyzList[0]}
 
 def loadff(fName):
     if not fName.endswith('.mat'):
