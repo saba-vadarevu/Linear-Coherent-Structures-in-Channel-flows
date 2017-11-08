@@ -9,6 +9,7 @@ import ops
 import pseudo
 from warnings import warn
 from scipy.linalg import expm, solve_sylvester
+from scipy.sparse.linalg import expm_multiply
 
 def impulseVec(a,b,**kwargs):
     """ Generate 3C impulse vector Fs (see sec. 10.1 of Jovanovic's thesis) from wall=normal profile 'fs' 
@@ -90,6 +91,23 @@ def impulseVec(a,b,**kwargs):
 
     return {'Fs':Fs, 'FsAdj':FsAdj, 'a':a, 'b':b,  'DeltaInv':DeltaInv}
 
+def _floatGCD(a,b,reltol=1.e-05, abstol=1.e-09):
+    t = min(a, b)
+    while b > reltol*t + abstol:
+        a, b = b, a%b
+    return a
+
+def _arrGCD(arr, tol = 1.e-09 ):
+    arr = np.array([arr]).flatten()
+    assert (arr > 0.).all()
+    if np.linalg.norm( ( arr + tol ) % arr[0] ) < 10.* arr.size * tol:
+        return arr[0]
+    else:
+        gcdEst = arr[0] 
+        for ind in range(1, arr.size):
+            gcdEst = _floatGCD( gcdEst, arr[ind] )
+        return gcdEst
+        
 
 
 def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=None,printOut=False):
@@ -156,24 +174,43 @@ def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=N
     if printOut:
         print("Computing impulse response for times ",tArr)
 
+   
     # At each time 't', and for 4 impulse cases (x, y, z, xyz), 3 components and 3 energies
-    coeffArr = np.zeros( (tArr.size, 4, 3*N), dtype=np.complex )
-    energyArr = np.zeros( (tArr.size,4, 4), dtype=np.complex)
-    
-    for i0 in range(tArr.size):
-        t = tArr[i0]
-        expFactor = C @ expm(t*A)
-        expFactorAdj = expm(t*Aadj) @ Cadj
-        for i1 in range(4):
-            FsVec = Fs[i1].reshape((2*N,1))
-            FsAdjVec = FsAdj[i1].reshape((1,2*N))
-            coeffs = ( expFactor @ FsVec ).flatten()
-            energy = (FsAdjVec @ expFactorAdj ).flatten() * coeffs  # (Weighted) pointwise energy in mode for u, v, w
-            coeffArr[i0,i1] = coeffs 
-            energyArr[i0,i1,0] = np.sum( energy[   : N ]   )
-            energyArr[i0,i1,1] = np.sum( energy[ N :2*N]   )
-            energyArr[i0,i1,2] = np.sum( energy[2*N:   ]   )
-            energyArr[i0,i1,3] = np.sum( energy    )
+    tol = 1.e-09
+    # If tArr is tArr[0] * [1:n], then get e^{A * nt} as e^{At} @ e^{A(n-1)t}
+    if np.linalg.norm( tArr[0]*np.arange(1,tArr.size+1) - tArr ) < tol * tArr.size :
+        coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
+        expFactor = expm(tArr[0] * A) 
+        coeffArr[0] = expFactor @ Fs.T
+        for i0 in range(1, tArr.size):
+            coeffArr[i0] = expFactor @ coeffArr[i0-1]
+        coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
+    else:
+        # If entries of tArr are integral multiples of some number close enough to tArr[0],
+        #   calculate e^{A t_0}, and then raise it to integral powers
+        gcdEst = _arrGCD(tArr)
+        if tArr[0] < 50 * gcdEst:
+            coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
+            tArrFac = np.int(np.round( tArr/gcdEst )) 
+            for i0 in range(tArr.size):
+                expFactor0 = np.matrix(expm(t*A))
+                coeffArr[i0] =  (expFactor0**tArrFac[i0]) @ Fs.T 
+            coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
+        else:
+            # worst case, 
+            coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
+            for i0 in range(tArr.size):
+                coeffArr[i0] = expm(tArr[i0]*A)  @ Fs.T 
+            coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
+
+    coeffArr = np.swapaxes(coeffArr, axis1=1, axis2=2)
+
+    # Don't really need the adjoints and all that to compute energy since coeffArr are for [u,v,w]. A plain old chebnorm is enough
+    energyArr = np.zeros((tArr.size, 4,4))
+    w = pseudo.clencurt(N).reshape((1,1,1,N))
+    energyArr[:,:,:3] = np.sum( w * ( coeffArr.reshape((tArr.size,4,3,N)) * coeffArr.conj().reshape((tArr.size, 4, 3, N))  ), axis=-1 )
+    energyArr[:,:,3] = np.sum(energyArr[:,:,:3], axis=-1 )
+
     
     outDict = {'a':a, 'b':b, 'tArr':tArr, \
             'N':linInst.N, 'Re':linInst.Re, 'turb':linInst.flowState, \
@@ -213,7 +250,7 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
         for i3 in range(y0Arr.size):
             y0 = y0Arr[i3]
             fsArr[i2,i3] = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
-    print("Running for aArr=",aArr)
+    #print("Running for aArr=",aArr)
     for i0 in range(aArr.size):
         a = aArr[i0]
         print("a=",a)

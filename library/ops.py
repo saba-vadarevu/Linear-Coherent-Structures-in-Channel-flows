@@ -929,7 +929,7 @@ def turbMeanChannel(N=191,Re=186.,**kwargs):
     alfa = kwargs.get('alfa', alfa)
     kapa = kwargs.get('kapa', kapa)
     kwargs['walls'] = kwargs.get('walls',False)
-    print("Using parameters Re=%.4g, alfa=%.4g, kapa=%.4g, N=%d"%(Re,alfa,kapa,N))
+    #print("Using parameters Re=%.4g, alfa=%.4g, kapa=%.4g, N=%d"%(Re,alfa,kapa,N))
 
     nuT = lambda zt: -0.5 + 0.5*np.sqrt( 1.+
                 (kapa*Re/3.* (2.*zt - zt**2) * (3. - 4.*zt + 2.*zt**2) *
