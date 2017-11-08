@@ -181,7 +181,7 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
     
     return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[0],'FxyzResponse':FxyzList[0]}
 
-def loadff(fName):
+def loadff(fName,printOut=False):
     if not fName.endswith('.mat'):
         fNamePrefix = fName.split('.')[0]
         fName = fNamePrefix +'.mat'
@@ -197,11 +197,12 @@ def loadff(fName):
     ff = flowField(aArr, bArr, N, flowDict=flowDict)
     ff[:] = loadDict['ffArr']
 
-    print("Loaded flowField from ",fName)
+    if printOut:
+        print("Loaded flowField from ",fName)
 
     return ff
 
-def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1):
+def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1, **kwargs):
     """
     Load flowField from a set of  .mat files 
     Current convention for naming split flowfield files is
@@ -228,7 +229,7 @@ def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1):
             fName = fName + '_bPart1_%d'%nb
         fName = fName + fSuffix 
 
-        ff = loadff(fName)
+        ff = loadff(fName,**kwargs)
 
 
     # Now the rest of them 
@@ -245,7 +246,7 @@ def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1):
             
             # Don't want to append the first field to itself, so..
             if counter > 0:
-                ff = ff.appendField( loadff(fName) )
+                ff = ff.appendField( loadff(fName,**kwargs) )
             counter += 1
     ff.sortWavenumbers()
     return ff
@@ -432,31 +433,6 @@ class flowField(np.ndarray):
         assert self.shape == (self.aArr.size, self.bArr.size, 3, self.N )
         return
     
-    def slice(self,aArr=None,bArr=None,N=None):
-        """
-        Returns a class instance with increased/reduced aArr, bArr, N 
-        Call as new_inst = myFlowField.slice(aArr=newArr, bArr=newArr, N=newN)) 
-        """
-        
-        obj = self.copyArray()
-
-        """ THERE MIGHT BE ISSUES WITH ARRAYS NOT BEING CONTIGUOUS.
-        IF THAT HAPPENS USE np.ascontiguousarray(arr) WHEREVER THE ERROR SHOWS UP
-        """
-        if (aArr is not None) or (bArr is not None):
-            warn("Slicing aArr and bArr isn't ready yet... Returning original array... ")
-        if (N is not None) and (N != self.N):
-            Nnew = abs(int(N))
-            Nold = self.N
-            newInst = flowField(self.aArr.size, self.bArr.size, Nnew,
-                        flowDict=self.flowDict)
-            for i0 in range(self.aArr.size):
-                for i1 in range(self.bArr.size):
-                    for i2 in range(3):
-                        newInst[i0,i1,i2] = pseudo.chebint(self[i0,i1,i2],newInst.y)
-        else:
-            newInst = self.copy()
-        return newInst
     
     
     def copyArray(self):
@@ -541,7 +517,7 @@ class flowField(np.ndarray):
         """Integrates v[nd=j]*v[nd=j].conjugate() along x_j, sums across j=1,..,self.nd , and takes its square-root"""
         return np.sqrt(self.dot(self))
 
-    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', padded=False, doSort=False):
+    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False):
         """
         Get physical fields from spectral
         Inputs:
@@ -552,7 +528,6 @@ class flowField(np.ndarray):
                 If any of them is specified, truncate domain to [x0,x0+lx] , [z0,-z0]
                 Allow x0 to go in [-Lx/2., 0] if needed, coz sometimes the full structure has some back-propogation
             N (=None):  If set to a value other than self.N, interpolate to a different wall-normal grid
-            padded (=False): pad x-z modes to twice the number to get finer physical field
             ySpace (='cheb'): If 'cheb', keep data on Chebyshev grid
                                 If 'linear', interpolate to uniformly spaced points
         Outputs:
@@ -573,8 +548,7 @@ class flowField(np.ndarray):
         # x-Modes go 0,1,..,L-1,L,-L+1,-L+2,..,-1, a total of 2*L
         # z-Modes go 0,1,..,M-1,M, a total of M+1
         L = self.aArr.size//2; M = self.bArr.size-1 
-        if padded: nx = 4*L; nz = 4*M
-        else: nx = 2*L; nz = 2*M
+        nx = 2*L; nz = 2*M
 
         # fundamental wavenumbers to define periodic domain
         a0 = np.amin( self.aArr[ np.where(self.aArr > 0.)[0]] )   # Smallest positive wavenumber
@@ -587,7 +561,7 @@ class flowField(np.ndarray):
             print("aArr doesn't seem to be integral multiples. Have a look")
             print("a0 is", a0)
             print("aArr/a0 is ", self.aArr/a0)
-        if not ( np.linalg.norm(self.bArr- bArrIdeal) < 1.e-09*a0 ) :
+        if not ( np.linalg.norm(self.bArr- bArrIdeal) < 1.e-09*b0 ) :
             print("bArr doesn't seem to be integral multiples. Have a look")
             print("b0 is", b0)
             print("bArr/b0 is ", self.bArr/b0)
@@ -609,10 +583,11 @@ class flowField(np.ndarray):
                 yArr = self.y.copy()
                 interpFlag = False
 
-        
+       
+        #pdb.set_trace()
         # Let's start working on truncating the domain according to x0,x1,z0
         if (z0 is None) or (z0>0.) or (z0 < -Lz/2.): z0 = zArr[0]
-        z1 = -z0 - ( zArr[1] - zArr[0] )    # +Lz/2. is excluded, so...
+        z1 = -z0 - ( zArr[1] - zArr[0] )*(1.+1.e-4)    # +Lz/2. is excluded, so...
         z0ind = np.where(zArr <= z0)[0][-1]     # Index of largest entry of zArr <= z0 
         z1ind = np.where(zArr >= z1)[0][0] + 1  # Index of (second) smallest entry of zArr >= z0
         foldInX = False     
@@ -650,7 +625,7 @@ class flowField(np.ndarray):
         x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
         
         # Treatment in z is quite straight-forward, so go with 
-        arrPhysUnfolded = _spec2physIfft( arr, padded=padded )[:, z0ind:z1ind]
+        arrPhysUnfolded = _spec2physIfft( arr)[:, z0ind:z1ind]
         zArr = zArr[z0ind:z1ind]
         nz1 = zArr.size
 
@@ -705,6 +680,16 @@ class flowField(np.ndarray):
         a0 = np.amin(aArr[ np.where(aArr > 0.)[0]])   # Smallest positive wavenumber
         b0 = np.amin(bArr[ np.where(bArr > 0.)[0]])   # Smallest positive wavenumber
         assert (b0 >= 0.).all()
+        
+        L = aArr.size//2 ; M = bArr.size-1
+        aArrIdeal = a0*np.arange(-L,L)
+        bArrIdeal = b0*np.arange(0,M+1)
+
+        if  (np.linalg.norm( aArr - np.fft.ifftshift(aArrIdeal) ) < a0* 1.e-09)  and \
+                (np.linalg.norm( bArr - bArrIdeal ) < b0* 1.e-09):
+            #Nothing to do here. Wavenumbers already in fft order
+            return
+
             
         
         # Do the sorting in 2 steps.
@@ -712,9 +697,6 @@ class flowField(np.ndarray):
         aInd = np.argsort(aArr)
         bInd = np.argsort(bArr)
         
-        L = aArr.size//2 ; M = bArr.size-1
-        aArrIdeal = a0*np.arange(-L,L)
-        bArrIdeal = b0*np.arange(0,M+1)
         #pdb.set_trace()
 
         # Now, aArr should look like aArrIdeal, and bArr as bArrIdeal
@@ -907,7 +889,55 @@ class flowField(np.ndarray):
         else:
             self.messyAppendField(ff)
         return ffLong
+    
+    def slice(self, L=None, M=None, N=None):
+        """
+        Interpolate/pad flowField along x, y, z
+        Inputs:
+            L (=None):  Number of streamwise Fourier modes. If more than self.nx//2, pad with zeros. If less, drop higher wavenumbers
+            M (=None):  Same as above, for spanwise
+            N (=None):  Number of (internal) wall-normal nodes
+        Outputs:
+            flowField instance of shape, (2L, 2M, 3, N)
+        """
+        self.sortWavenumbers()
+        if (L is None) and (M is None) and (N is None):
+            return self.copy()
+        aArr = self.aArr.copy(); bArr = self.bArr.copy()
+        a0 = aArr[1]; b0 = bArr[1]  # I've already done self.sortwavenumbers(), so..
+        if L is None : L = self.aArr.size//2
+        if M is None : M = self.bArr.size - 1 
+        if N is None : N = self.N
+        N = int(N)
+        L0 = self.aArr.size // 2; M0 = self.bArr.size - 1; N0 = self.N
+        aArrNew = np.fft.ifftshift( a0 * np.arange(-L, L) )
+        bArrNew = np.arange(M+1)
+
+        # Initialize a new zero ff instance
+        ff = flowField(aArrNew, bArrNew, N0, flowDict=self.flowDict)
+        # If N0 != N, first do the Fourier mode slicing, and do the interpolation later
+
+        # Now to set the entries of ff from self
+        # First, the a>0 modes 
+        L = min(L, L0); M = min(M,M0)   # These modes exist in both self and ff
+        ff[:L, :M+1] = self[:L, :M+1]
+        # Now the a<0 modes
+        ff[-L:, :M+1] = self[-L:, :M+1]
+        # That takes care of padding/dropping modes. 
+
+        # Now to the interpolation, if needed
+        if (N == N0):
+            return ff
+
+        ffNew = flowField(aArrNew, bArrNew, N, flowDict=self.flowDict)
         
+        for i0 in range(ff.aArr.size):
+            for i1 in range(ff.bArr.size):
+                for i2 in range(3):
+                    ffNew[i0,i1,i2] = pseudo.chebint( ff[i0,i1,i2], ffNew.y )
+
+        return ffNew
+
     def messyAppendField(self,ff):
         """ Combine flowFields, like appendField(), but without the restriction
         When (a,b) in the new ff instance is not in either self or ff, leave zeros
@@ -919,9 +949,21 @@ class flowField(np.ndarray):
         raise RuntimeError("This isn't ready yet... Ensure appendField can be used..")
         return
 
+    def modeWiseNorm(self):
+        """ 
+        Return energy in each Fourier mode for each component of velocity
+        Inputs:
+            None
+        Outputs:
+            array flattened in last dimension (along wall-normal)
+        """
+        w = pseudo.clencurt(self.N).reshape((1,1,1,self.N))
+
+        energyArr = np.sum( w * self.conj() * self, axis=-1 ).real
+        return energyArr
 
 
-def _spec2physIfft(arr, padded=False):
+def _spec2physIfft(arr):
     # symm decides how I should extend the Fourier coeffs in the first quadrant
     #   of the a-b plane to the second quadrant.
     # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
@@ -930,8 +972,7 @@ def _spec2physIfft(arr, padded=False):
     warn("Assuming that modes go positive and negative in kx")
 
     # The array is now ready to be used for numpy's rifft2
-    if padded: nx = 4*L; nz = 4*M
-    else: nx = 2*L; nz = 2*M
+    nx = 2*L; nz = 2*M
 
     scaleFactor = nx * nz    # times something related to a0,b0??
     physField =  scaleFactor * np.fft.irfft2( arr, s=(nx, nz),axes=(0,1) )  
