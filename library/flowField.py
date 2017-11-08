@@ -517,7 +517,7 @@ class flowField(np.ndarray):
         """Integrates v[nd=j]*v[nd=j].conjugate() along x_j, sums across j=1,..,self.nd , and takes its square-root"""
         return np.sqrt(self.dot(self))
 
-    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False):
+    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=True, **kwargs):
         """
         Get physical fields from spectral
         Inputs:
@@ -530,6 +530,9 @@ class flowField(np.ndarray):
             N (=None):  If set to a value other than self.N, interpolate to a different wall-normal grid
             ySpace (='cheb'): If 'cheb', keep data on Chebyshev grid
                                 If 'linear', interpolate to uniformly spaced points
+            doSort (=True):  If True, call self.sortWavenumbers()
+            **kwargs: accept keys 'L' and 'M' to use for padding
+                    sends **kwargs directly to _spec2physIfft() directly to avoid issues with L and M in the current function
         Outputs:
             outDict with keyds
                 arrPhys:    Physical field for arr
@@ -547,16 +550,19 @@ class flowField(np.ndarray):
         warn("Remember to have both positive and negative streamwise wavenumbers, and non-negative spanwise.")
         # x-Modes go 0,1,..,L-1,L,-L+1,-L+2,..,-1, a total of 2*L
         # z-Modes go 0,1,..,M-1,M, a total of M+1
-        L = self.aArr.size//2; M = self.bArr.size-1 
-        nx = 2*L; nz = 2*M
-
+        L0 = self.aArr.size//2; M0 = self.bArr.size-1 
+        if ('L' not in kwargs) or (kwargs['L'] is None): L = L0
+        else : L = kwargs['L']
+        if ('M' not in kwargs) or (kwargs['M'] is None): M = M0
+        else : M = kwargs['M']
+        #pdb.set_trace()
         # fundamental wavenumbers to define periodic domain
         a0 = np.amin( self.aArr[ np.where(self.aArr > 0.)[0]] )   # Smallest positive wavenumber
         b0 = np.amin( self.bArr[ np.where(self.bArr > 0.)[0]] )   # Smallest positive wavenumber
 
         # Ensure aArr and bArr are integral multiples
-        aArrIdeal = a0 * np.fft.ifftshift( np.arange(-L, L) )   # -L is included, but L isn't. 
-        bArrIdeal = b0 * np.arange(0,M+1)
+        aArrIdeal = a0 * np.fft.ifftshift( np.arange(-L0, L0) )   # -L is included, but L isn't. 
+        bArrIdeal = b0 * np.arange(0,M0+1)
         if not ( np.linalg.norm(self.aArr- aArrIdeal) < 1.e-09*a0 ) :
             print("aArr doesn't seem to be integral multiples. Have a look")
             print("a0 is", a0)
@@ -568,9 +574,15 @@ class flowField(np.ndarray):
        
         # Grids in x, z, and y
         # Worry about x0, x1, z0, z1 after the iFFT
+        # Note that I have a different L and L0 if I'm trying to use padding
+        # For the checks above, use L0, M0 since arr and self are defined for L0, M0
+        # L and M come into play in _spec2physIfft(), so I must build xArr and zArr to reflect these
+        # Of course, if L==L0 and M==M0, there's nothing to worry about
+        nx = 2*L; nz = 2*M
         Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
         xArr = np.linspace(0., Lx, nx+1)[:-1]
         zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
+
         interpFlag = True
         if N is not None:
             if ySpace == 'linear':
@@ -625,7 +637,7 @@ class flowField(np.ndarray):
         x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
         
         # Treatment in z is quite straight-forward, so go with 
-        arrPhysUnfolded = _spec2physIfft( arr)[:, z0ind:z1ind]
+        arrPhysUnfolded = _spec2physIfft( arr, **kwargs)[:, z0ind:z1ind]
         zArr = zArr[z0ind:z1ind]
         nz1 = zArr.size
 
@@ -963,19 +975,30 @@ class flowField(np.ndarray):
         return energyArr
 
 
-def _spec2physIfft(arr):
-    # symm decides how I should extend the Fourier coeffs in the first quadrant
-    #   of the a-b plane to the second quadrant.
-    # For even symm, I extend as f_{-a,b} = conj( f_{a,-b} ) = conj( f_{a,b} )
-    # For odd  symm, I extend as f_{-a,b} = conj( f_{a,-b} ) =-conj( f_{a,b} )
-    L = arr.shape[0]//2; M = arr.shape[1]-1; N= arr.shape[2]
+def _spec2physIfft(arr0, L=None, M=None):
+    """
+            L (=None):      If supplied, and different from self.aArr//2, slice flowField
+                                Used for padding, since numpy's padding seems a bit funny
+            M (=None):      Same as above, but for spanwise modes
+    """
+    L0 = arr0.shape[0]//2; M0 = arr0.shape[1]-1; N= arr0.shape[2]
     warn("Assuming that modes go positive and negative in kx")
+    if (L is not None) or (M is not None): 
+        if L is None : L = L0
+        if M is None : M = M0
+        arr = np.zeros((2*L, M+1,N), dtype=np.complex)
+        Lt = min(L, L0); Mt = min(M,M0)
+        arr[:Lt, :Mt+1] = arr0[:Lt, :Mt+1]
+        arr[-Lt:, :Mt+1] = arr0[-Lt:, :Mt+1]
+    else:
+        arr = arr0; L = L0; M = M0
+        
 
     # The array is now ready to be used for numpy's rifft2
     nx = 2*L; nz = 2*M
 
     scaleFactor = nx * nz    # times something related to a0,b0??
-    physField =  scaleFactor * np.fft.irfft2( arr, s=(nx, nz),axes=(0,1) )  
+    physField =  scaleFactor * np.fft.irfft2( arr, axes=(0,1) )  
     
     # This field goes from 0 to Lz in z. I want to to go from -Lz/2 to Lz/2(exclusive):
     physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
