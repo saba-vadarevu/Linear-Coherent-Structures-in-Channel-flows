@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
 import pseudo
+import sys
 
 def phys2spec(t=100000, L=64,M=48,Nx=512,Ny=320,Nz=192,loadPath=None,savePath=None,prefixes=['u','v','w']):
     """ Read binary file for physical field and write binary file for spectral field
@@ -368,6 +369,6 @@ def binarySearch(someFun, minVar, maxVar, tol=1.0e-03, nSteps=20, **kwargs):
     print("max steps reached in binary search. Returning..")
     return newVar
                                             
-                                                                                                                                                                                                                                                        
+
 
 
