@@ -59,17 +59,17 @@ def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
     Call impulseResponse, but with aArr and bArr split into 'na' and 'nb' parts
     """
     if not (na==1): aStep = np.ceil(aArr.size/na)
-    else: aStep = aArr.size
+    else : aStep = aArr.size
     aStep = int(aStep)
     if not (nb==1): bStep = np.ceil(bArr.size/ba)
-    else: bStep = bArr.size
+    else : bStep = bArr.size
     bStep = int(bStep)
     aArrFull = aArr.copy()
     bArrFull = bArr.copy()
 
     if not ('fPrefix' in kwargs):
         warn("You have to supply fPrefix, or the fields aren't going to be saved")
-    else:
+    else :
         fPrefix0 = kwargs.pop('fPrefix')
         fFlag = True
 
@@ -77,14 +77,14 @@ def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
         aArr = aArrFull[ aInd*aStep : (aInd+1)*aStep ]
         if (not (na==1)) and fFlag:
             aPrefix = '_aPart%d_%d'%(aInd+1,na)
-        else: 
+        else : 
             aPrefix = ''
 
         for bInd in range(nb):
             bArr = bArrFull[bInd*bStep : (bInd+1)*bStep]
             if (not (nb==1)) and fFlag:
                 bPrefix = '_bPart%d_%d'%(bInd+1,nb)
-            else:
+            else :
                 bPrefix = ''
             fPrefix = fPrefix0 + aPrefix + bPrefix 
             impulseDict = impulseResponse(aArr, bArr, N, tArr, fPrefix= fPrefix,**kwargs)
@@ -127,7 +127,7 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
     Re = flowDict.get('Re',2000.)
     if flowDict.get('flowState','turb') == 'turb':
         turb = True
-    else: turb = False
+    else : turb = False
     eddy = flowDict.get('eddy',False)
     #print("Computing impulse response at tArr, aArr, bArr:",tArr,aArr, bArr)
     print("Flow parameters are (Re,N,eddy,turb):",(Re,N,eddy,turb))
@@ -166,7 +166,7 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
     
     # Save each ff instance if fPrefix is supplied;
     #   Append _Fx_txxxx.mat to the prefix
-    if fPrefix is not None:
+    if fPrefix is not None :
         fPrefix = fPrefix.split('.')[0]    # Get rid of format suffix, if supplied
         for tInd in range(tArr.size):
             t = tArr[tInd]
@@ -219,22 +219,9 @@ def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1, **kwargs):
     Outputs:
         flowField instance 
     """
-    # Let's get one ff first, so I can call ff.appendField() later
     fSuffix = '_%s_t%05d.mat'%(forcing, round(100*t) )
-    if True:
-        # Just get some indent
-        if na > 1:
-            fName = fPrefix + '_aPart1_%d'%na
-        if nb > 1:
-            fName = fName + '_bPart1_%d'%nb
-        fName = fName + fSuffix 
-
-        ff = loadff(fName,**kwargs)
-
-
-    # Now the rest of them 
     aPrefix = ''; bPrefix = ''
-    counter = 0
+    firstField = True
     for aInd in range(na):
         if na > 1:
             aPrefix = '_aPart%d_%d'%(aInd+1, na)
@@ -245,9 +232,11 @@ def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1, **kwargs):
             fName = fPrefix + aPrefix + bPrefix + fSuffix
             
             # Don't want to append the first field to itself, so..
-            if counter > 0:
+            if not firstField:
                 ff = ff.appendField( loadff(fName,**kwargs) )
-            counter += 1
+            else :
+                ff = loadff(fName,**kwargs)
+                firstField = False 
     ff.sortWavenumbers()
     return ff
     
@@ -275,12 +264,12 @@ def add2physical(u=None, vorz=None, swirl=None, ffList=None, fNameList=None, ySp
     if not set(('x0','x1')) <= set(kwargs):
         x0 = -0.1*Lx; x1 = 0.9*Lx; 
         xShift = kwargs.get('xShift',2./3.* np.amax(ff.U)*ff.flowDict['t'])
-    else:
+    else :
         x0 = kwargs['x0']; x1 = kwargs['x1']
         xShift = kwargs.get('xShift',0.)
     if not set(('z0','z1')) <= set(kwargs):
         z0 = -0.5*Lz; z1 = 0.5*Lz; 
-    else:
+    else :
         z0 = kwargs['z0']; z1 = kwargs['z1']
     xArr =  xShift + np.linspace(x0, x1, u.shape[0])
     zArr =  zShift + np.linspace(z0, z1, u.shape[0])
@@ -290,7 +279,7 @@ def add2physical(u=None, vorz=None, swirl=None, ffList=None, fNameList=None, ySp
     #   but I can't do that for swirl, so
     velGrad = np.zeros(( xArr.size, zArr.size, yArr.size, 3, 3 ))
     warn("THIS ROUTINE IS INCOMPLETE. DO NOT USE IT.")
-    if fNameList is not None:
+    if fNameList is not None :
         for fName in fNameList:
             ff = loadff(fName)
             u[:] += ff.toPhysical(arr=ff[:,:,0], xArr=xArr, zArr=zArr, N=u.shape[-1], 
@@ -347,16 +336,16 @@ class flowField(np.ndarray):
         """Creates a new instance of flowField class, call as
             flowField(aArr, bArr, N ,flowDict=flowDict)
         """
-        if flowDict is None:
+        if flowDict is None :
             flowDict= defaultDict
-        else:
+        else :
             assert set(('Re','flowClass', 'flowState','eddy','t')) <= set(flowDict)
         if len(args) > 0 : aArr = args[0]
-        else: aArr = aArrDefault 
+        else : aArr = aArrDefault 
         if len(args) > 1 : bArr = args[1]
-        else: bArr = bArrDefault 
+        else : bArr = bArrDefault 
         if len(args) > 2 : N = args[2]
-        else: N = NDefault 
+        else : N = NDefault 
        
          
         aArrPos = aArr[ np.where(aArr>=0.)[0]]
@@ -385,7 +374,7 @@ class flowField(np.ndarray):
         assert flowDict['flowClass'] not in ['couette','bl'], "Currently only channel is supported"
         if flowDict['flowState'] == 'lam':
             U = 1. - y**2; dU = -2.*y; d2U = -2.*np.ones(N)
-        else:
+        else :
             turbDict = ops.turbMeanChannel(N=N,Re=flowDict['Re'])
             U = turbDict['U']; dU = turbDict['dU']; d2U = turbDict['d2U']
 
@@ -395,7 +384,7 @@ class flowField(np.ndarray):
         
     
     def __array_finalize__(self,obj):
-        if obj is None: return
+        if obj is None : return
          
         self.flowDict = getattr(self,'flowDict',obj.flowDict.copy())
         self.aArr = getattr(self,'aArr',obj.aArr)
@@ -517,7 +506,13 @@ class flowField(np.ndarray):
         """Integrates v[nd=j]*v[nd=j].conjugate() along x_j, sums across j=1,..,self.nd , and takes its square-root"""
         return np.sqrt(self.dot(self))
 
-    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=True, **kwargs):
+
+
+
+
+
+
+    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False, **kwargs):
         """
         Get physical fields from spectral
         Inputs:
@@ -538,16 +533,19 @@ class flowField(np.ndarray):
                 arrPhys:    Physical field for arr
                 xArr, yArr, zArr:   arrays for x, y, and z
         """
-        if doSort: self.sortWavenumbers()
-        else: warn("Are you sure wavenumbers are in fft order?")
-
-        if arr is None:
+        if arr is None :
+            self.sortWavenumbers()
             arr = self.copyArray()[:,:,0]
             warn("arr is not supplied to 'toPhysical', using streamwise velocity...")
-        else: assert (arr.shape == (self.aArr.size, self.bArr.size,self.N)) or \
+        else : 
+            assert (arr.shape == (self.aArr.size, self.bArr.size,self.N)) or \
                 (arr.shape == (self.aArr.size, self.bArr.size,1,self.N))
-        
-        warn("Remember to have both positive and negative streamwise wavenumbers, and non-negative spanwise.")
+            warn("Ensure input arr confirms to fft order for wavenumbers")
+
+       
+        #===============================================================
+        # Ensure fft order for self.aArr and self.bArr 
+        #================================
         # x-Modes go 0,1,..,L-1,L,-L+1,-L+2,..,-1, a total of 2*L
         # z-Modes go 0,1,..,M-1,M, a total of M+1
         L0 = self.aArr.size//2; M0 = self.bArr.size-1 
@@ -571,7 +569,10 @@ class flowField(np.ndarray):
             print("bArr doesn't seem to be integral multiples. Have a look")
             print("b0 is", b0)
             print("bArr/b0 is ", self.bArr/b0)
-       
+
+        #=================================================================
+        # Define basic xArr, yArr, and zArr
+        #=============================
         # Grids in x, z, and y
         # Worry about x0, x1, z0, z1 after the iFFT
         # Note that I have a different L and L0 if I'm trying to use padding
@@ -584,24 +585,37 @@ class flowField(np.ndarray):
         zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
 
         interpFlag = True
-        if N is not None:
+        if N is not None :
             if ySpace == 'linear':
                 yArr = np.linspace(1., -1., N+2)[1:-1]
-            else: yArr = pseudo.chebdif(N,1)[0]
-        else:
+            else : yArr = pseudo.chebdif(N,1)[0]
+        else :
             if ySpace == 'linear':
                 yArr = np.linspace(1., -1., self.N+2)[1:-1]
-            else:
+            else :
                 yArr = self.y.copy()
                 interpFlag = False
-
+        
+        #=================================================================
+        # z0ind and z1ind
+        #===================
        
-        #pdb.set_trace()
         # Let's start working on truncating the domain according to x0,x1,z0
         if (z0 is None) or (z0>0.) or (z0 < -Lz/2.): z0 = zArr[0]
         z1 = -z0 - ( zArr[1] - zArr[0] )*(1.+1.e-4)    # +Lz/2. is excluded, so...
-        z0ind = np.where(zArr <= z0)[0][-1]     # Index of largest entry of zArr <= z0 
-        z1ind = np.where(zArr >= z1)[0][0] + 1  # Index of (second) smallest entry of zArr >= z0
+        try :
+            z0ind = np.where(zArr <= z0)[0][-1]     # Index of largest entry of zArr <= z0 
+        except :
+            z0ind = 0   # Just in case..
+        try :
+            z1ind = np.where(zArr >= z1)[0][0] + 1  
+            # Index of (second) smallest entry of zArr >= z0
+        except :
+            z1ind = zArr.size - 1
+
+        #==================================
+        # Get x0ind:
+        #===============
         foldInX = False     
         # This flag tells me if I need to rearrange the x-dimension, when x0 < 0
         if (x0 is None): x0 = xArr[0]
@@ -609,7 +623,11 @@ class flowField(np.ndarray):
         # Cases where reference frame moves beyond these limits can be reduced to the domain like so
         if x0 < 0.:
             # This is the tricky bit
-            x0ind = np.where(xArr <= -x0)[0][-1]     
+            try :
+                x0ind = np.where(xArr <= -x0)[0][-1]     
+            except :
+                x0ind = 0   # If np.where() doesn't work for whatever reason
+                print("setting x0ind to 0")
             x0ind = max(x0ind,1)    # Ensure x0ind is at least 1 to avoid issues later
             # Say x0 is -0.3. 
             # I'll count the number of entries to +0.3 instead of -0.3, 
@@ -618,24 +636,40 @@ class flowField(np.ndarray):
             foldInX = True
             nxFrame = 0     # This isn't useful for x0 in [-Lx/2, Lx]
             # For x0 > Lx, nxFrame tells me how many x-periods we have moved in
-        else:
+        else :
             nxFrame = x0 // Lx  
             x0 = x0 % Lx
             x0ind = np.where(xArr <= x0)[0][-1]     
+        
+        #===================================
+        # Get x1ind:
+        #=================
 
         # The starting point is set now. Next, x1
-        if lx is None: lx = xArr[-1]
+        if lx is None : lx = xArr[-1]
         lx = min(lx, xArr[-1])    # Don't keep a domain greater than Lx (for now)
 
         foldInX_x1 = False  # Same as foldInX above, but the other way around now
         x1 = x0 + lx
         x1 = max( 0, x1 )   # Don't allow x1 < 0 for now (makes the rearranging easier)
         if x1 > xArr[-1]:
-            foldInX_x1 = True   # foldInX and foldInX_x1 can't be true at the same time, because lx < Lx
+            foldInX_x1 = True   
+            # foldInX and foldInX_x1 can't be true at the same time, because lx < Lx
             x1 = x1 % Lx
 
-        x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
-        
+        try :
+            x1ind = np.where(xArr >= x1)[0][0] + 1   # Index of smallest entry of xArr >= x1
+        except :
+            x1ind = xArr.size - 1 
+            print("setting x1ind to -1")
+            # Sometimes x1 lies between xArr[-1] and Lx.
+            # A bit of effort should let me handle this properly, but I can't be bothered
+
+       
+        #==============================================================
+        # Get physical field, and re-order according to x0ind and x1ind 
+        #===============
+
         # Treatment in z is quite straight-forward, so go with 
         arrPhysUnfolded = _spec2physIfft( arr, **kwargs)[:, z0ind:z1ind]
         zArr = zArr[z0ind:z1ind]
@@ -656,10 +690,15 @@ class flowField(np.ndarray):
             # Since [Lx, Lx+x1] is identical to [0, x1], the 0 < x1 < x0 < Lx condition's valid
             indList = np.r_[ x0ind:xArr.size, 0:x1ind ]
             xArr[:x1ind] += Lx
-        #pdb.set_trace()
+
         xArr = xArr[indList] +  (Lx * nxFrame)
         arrPhys = arrPhysUnfolded[indList]
         nx1 = xArr.size
+
+
+        #==============================================================
+        # Divide by size of array, interpolate if needed
+        #======================
 
         arrPhys *= (1./(2.*np.pi)**2) * (a0*b0)
         if interpFlag:
@@ -668,6 +707,8 @@ class flowField(np.ndarray):
                     arrPhys[i0,i1] = pseudo.chebint(arr[i0,i1], yArr)
 
         return {'arrPhys':arrPhys, 'xArr':xArr, 'zArr':zArr, 'yArr':yArr}
+
+
 
 
     def sortWavenumbers(self):
@@ -796,10 +837,10 @@ class flowField(np.ndarray):
             None (just saving)
         """
         self.sortWavenumbers()
-        if fName is None: 
-            if fPrefix is None: 
+        if fName is None : 
+            if fPrefix is None : 
                 fName = 'testPhysFields.mat'
-            else:
+            else :
                 fName = fPrefix + '_%s_t%05d.mat'%(forcing, round(100*self.flowDict['t']))
 
         if not fName.endswith('.mat'): fName = fName.split('.')[0] + '.mat'
@@ -840,7 +881,7 @@ class flowField(np.ndarray):
         
         if len(saveDict.keys()) == 0:
             warn("Looks like there were no acceptable strings in fieldList:"+str(fieldList))
-        else:
+        else :
             saveDict.update({'xArr':physDict['xArr'], 'yArr':physDict['yArr'], 'zArr':physDict['zArr']})
             saveDict.update(self.flowDict)
             savemat(fName, saveDict)
@@ -898,7 +939,7 @@ class flowField(np.ndarray):
             ffLong = flowField( aNew, self.bArr, self.N, flowDict = self.flowDict )
             ffLong[:self.aArr.size] = self
             ffLong[self.aArr.size:] = ff
-        else:
+        else :
             self.messyAppendField(ff)
         return ffLong
     
@@ -990,7 +1031,7 @@ def _spec2physIfft(arr0, L=None, M=None):
         Lt = min(L, L0); Mt = min(M,M0)
         arr[:Lt, :Mt+1] = arr0[:Lt, :Mt+1]
         arr[-Lt:, :Mt+1] = arr0[-Lt:, :Mt+1]
-    else:
+    else :
         arr = arr0; L = L0; M = M0
         
 
