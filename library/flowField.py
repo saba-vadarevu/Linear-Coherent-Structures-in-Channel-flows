@@ -879,6 +879,14 @@ class flowField(np.ndarray):
                 saveDict.update({'vorz':physDict['arrPhys']} )
                 savedList.append('vorz')
         
+        a0 = self.aArr[1]; b0 = self.bArr[1]; Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        turbInt = (2./Lx/Lz)* np.sum( np.sum( self.conj() * self, axis=1), axis = 0 ) 
+        uvInt = (2./Lx/Lz)* np.sum( np.sum( self[:,:,0].conj() * self[:,:,1], axis=1), axis = 0 ).reshape((1,self.N))
+        turbInt = np.concatenate(( turbInt, uvInt), axis=0)
+
+        saveDict.update({'turbInt':turbInt})
+        
+
         if len(saveDict.keys()) == 0:
             warn("Looks like there were no acceptable strings in fieldList:"+str(fieldList))
         else :

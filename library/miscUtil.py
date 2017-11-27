@@ -2,6 +2,7 @@ import numpy as np
 from warnings import warn
 import sys
 import os
+import os.path
 import matplotlib.pyplot as plt
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
@@ -13,8 +14,8 @@ def phys2spec(t=100000, L=64,M=48,Nx=512,Ny=320,Nz=192,loadPath=None,savePath=No
     Inputs:
         t (int=100000):    Index for time snapshot
         Nx(int=512):    Number of streamwise nodes in physical data
-        Ny(int=320):    Number of wall-normal nodes in physical data
-        Nz(int=192):    Number of spanwise nodes in physical data. These are cell-centred, not the usual Cheb nodes
+        Ny(int=320):    Number of spanwise nodes in physical data
+        Nz(int=192):    Number of wall-normal nodes in physical data. These are cell-centred, not the usual Cheb nodes
         loadPath(str='$DATA/phys/'): Path where physical binaries are found. Uses system environment variable DATA if not supplied
         savePath(str='$DATA/spec/'): Path to save spectral binaries to
         prefixes(list=['u','v','w']):   Fields to read/write at the specified time
@@ -371,4 +372,73 @@ def binarySearch(someFun, minVar, maxVar, tol=1.0e-03, nSteps=20, **kwargs):
                                             
 
 
+def getPointData(loadDir, tArr, xyzArr, nx=2048, ny=512, nz=1152):
+    """ Get instantaneous u,v,w data at a few points in the box for a range of times 
+    Input:
+        loadDir: Path to outputdir of the DNS data
+        tArr: List/np.ndarray of times (int) 
+        xyzArr: numpy array of shape (m,3) specifying indices for x, y, z
+                    Remember, x and z are uniformly spaced, y is a Chebyshev grid
+        nx (=2048): Number of streamwise nodes used in DNS
+        ny (=512):  Number of wall-normal nodes used in DNS
+        nz (=1152): Number of spanwise nodes used in DNS
+                    The defaults work for ReTau=1000
+    Output:
+        outDict with keys 
+            'tArr', 'xyzArr', 'uArr', 'vArr, 'wArr' 
+                The last 3 are of shape (m,tArr.size)
+    """
+    if not loadDir.endswith('/'): loadDir = loadDir + '/'
+    tArr = np.array(tArr).flatten()
+    assert os.path.isfile(loadDir + 'u_it%d.dat'%tArr[0]), "Seems the loadDir (%s) is wrong"%loadDir
+    xyzArr = np.array(xyzArr)
+    xyzArr = xyzArr.reshape((xyzArr.size//3, 3))
 
+    uArr = np.zeros((xyzArr.shape[0], tArr.size)); vArr = uArr.copy(); wArr = uArr.copy()
+    loadFull = True 
+    for i1 in range(tArr.size):
+        t = tArr[i1]
+        with open(loadDir+"u_it%d.dat"%t, 'rb') as inFile:
+            if loadFull:
+                tmpArr = np.fromfile(inFile, dtype=np.float, count=-1)
+                tmpArr = tmpArr.reshape((nx,nz,ny))
+            
+            for i0 in range(xyzArr.shape[0]):
+                xyzInd = xyzArr[i0]; 
+                if not loadFull:
+                    # Remember that DNS data goes as x,z,y
+                    nByte = 8*( (ny*nz)*xyzInd[0] + (ny)*xyzInd[2] + xyzInd[1] )
+                    inFile.seek(nByte,1)    # Move 'nByte' bytes from the first byte
+                    uArr[i0, i1] = float(inFile.read(8))   # Read 8 bytes (double precision float)
+                else :
+                    uArr[i0,i1] = tmpArr[xyzInd[0], xyzInd[2], xyzInd[1]]
+        with open(loadDir+"v_it%d.dat"%t, 'rb') as inFile:
+            if loadFull:
+                tmpArr = np.fromfile(inFile, dtype=np.float, count=-1)
+                tmpArr = tmpArr.reshape((nx,nz,ny))
+            
+            for i0 in range(xyzArr.shape[0]):
+                xyzInd = xyzArr[i0]; 
+                if not loadFull:
+                    # Remember that DNS data goes as x,z,y
+                    nByte = 8*( (ny*nz)*xyzInd[0] + (ny)*xyzInd[2] + xyzInd[1] )
+                    inFile.seek(nByte,1)    # Move 'nByte' bytes from the first byte
+                    vArr[i0, i1] = float(inFile.read(8))   # Read 8 bytes (double precision float)
+                else :
+                    vArr[i0,i1] = tmpArr[xyzInd[0], xyzInd[2], xyzInd[1]]
+        with open(loadDir+"w_it%d.dat"%t, 'rb') as inFile:
+            if loadFull:
+                tmpArr = np.fromfile(inFile, dtype=np.float, count=-1)
+                tmpArr = tmpArr.reshape((nx,nz,ny))
+            
+            for i0 in range(xyzArr.shape[0]):
+                xyzInd = xyzArr[i0]; 
+                if not loadFull:
+                    # Remember that DNS data goes as x,z,y
+                    nByte = 8*( (ny*nz)*xyzInd[0] + (ny)*xyzInd[2] + xyzInd[1] )
+                    inFile.seek(nByte,1)    # Move 'nByte' bytes from the first byte
+                    wArr[i0, i1] = float(inFile.read(8))   # Read 8 bytes (double precision float)
+                else :
+                    wArr[i0,i1] = tmpArr[xyzInd[0], xyzInd[2], xyzInd[1]]
+       
+    return {'tArr':tArr, 'xyzArr':xyzArr, 'uArr':uArr, 'vArr':vArr, 'wArr':wArr, 'loadDir':loadDir}
