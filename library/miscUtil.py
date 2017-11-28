@@ -9,6 +9,35 @@ from scipy.interpolate import interp1d
 import pseudo
 import sys
 
+
+def _floatGCD(a,b,reltol=1.e-05, abstol=1.e-09):
+    t = min(a, b)
+    while b > reltol*t + abstol:
+        a, b = b, a%b
+    return a
+
+def _arrGCD(arr, tol = 1.e-09 ):
+    arr = np.array([arr]).flatten()
+    assert (arr > 0.).all()
+    if np.linalg.norm( ( arr + tol ) % arr[0] ) < 10.* arr.size * tol:
+        return arr[0]
+    else :
+        gcdEst = arr[0] 
+        for ind in range(1, arr.size):
+            gcdEst = _floatGCD( gcdEst, arr[ind] )
+        return gcdEst
+        
+def _areSame(arr1,arr2,tol=1.e-09):
+    return ( np.linalg.norm(arr1 - arr2) <= tol )
+
+def _nearestEntry(arr,a0):
+    return arr.flat[np.abs(arr-a0).argmin()]
+
+def _nearestInd(arr,a0):
+    return np.abs(arr-a0).argmin()
+
+
+
 def phys2spec(t=100000, L=64,M=48,Nx=512,Ny=320,Nz=192,loadPath=None,savePath=None,prefixes=['u','v','w']):
     """ Read binary file for physical field and write binary file for spectral field
     Inputs:

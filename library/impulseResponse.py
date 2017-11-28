@@ -12,6 +12,7 @@ from warnings import warn
 from scipy.linalg import expm, solve_sylvester
 from scipy.sparse.linalg import expm_multiply
 import pdb
+from miscUtil import _arrGCD, _floatGCD, _areSame, _nearestEntry, _nearestInd
 
 def _fs0(**kwargs):
     if kwargs.get('turb', True):
@@ -66,37 +67,11 @@ def _fs(fsAmp=None, **kwargs):
     return fsDict
 
 
-def _floatGCD(a,b,reltol=1.e-05, abstol=1.e-09):
-    t = min(a, b)
-    while b > reltol*t + abstol:
-        a, b = b, a%b
-    return a
-
-def _arrGCD(arr, tol = 1.e-09 ):
-    arr = np.array([arr]).flatten()
-    assert (arr > 0.).all()
-    if np.linalg.norm( ( arr + tol ) % arr[0] ) < 10.* arr.size * tol:
-        return arr[0]
-    else :
-        gcdEst = arr[0] 
-        for ind in range(1, arr.size):
-            gcdEst = _floatGCD( gcdEst, arr[ind] )
-        return gcdEst
-        
-def _areSame(arr1,arr2,tol=1.e-09):
-    return ( np.linalg.norm(arr1 - arr2) <= tol )
-
-def _nearestEntry(arr,a0):
-    return arr.flat[np.abs(arr-a0).argmin()]
-
-def _nearestInd(arr,a0):
-    return np.abs(arr-a0).argmin()
 
 
 def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy=False, impulseArgs=None,printOut=False):
     """
-    Return energy and Fourier coeffs (if requested) for a single Fourier mode for different combinations of forcing at different times 
-    We're using the same shape for the impulse in y for each of x,y,z, but changing the relative amplitudes of fx, fy, fz. 
+    Return energy and Fourier coeffs (if requested) for a single Fourier mode for different combinations of forcing at different times We're using the same shape for the impulse in y for each of x,y,z, but changing the relative amplitudes of fx, fy, fz. 
     Inputs:
         Compulsory args:
             a, b, tArr: wavenumbers and time
@@ -179,10 +154,10 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     # or
     #   u = C_u psi;    v = C_v psi;    w = C_w psi
     # So that u(t) = C_u @ (e^{A(t/n)})^n @ B @ fs, and similarly for v, w 
-    systemDict = linInst.makeSystem(a=a, b=b, adjoint=True, eddy=eddy)
+    systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
     A = systemDict['A']
-    C = systemDict['C']; Cu = C[:N];    Cv = C[N:2*N];  Cw = C[2*N:]
-    B = systemDict['B']; BH = B.conj().T
+    C = systemDict['C']; 
+    B = systemDict['B']; 
     W = linInst.weightDict['W1']   
     w = linInst.w
     
@@ -282,16 +257,16 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
 
 
 
-def evolveImpulse(t, linInst=None,modeDict=None, eddy=False,
-        aArr=None, bArr=None, fsAmp=None, impulseArgs=None):
+def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
+        fsAmp=None, impulseArgs=None):
     """
-    Returns numpy array with Fourier coeffs at time 't' for specified forcing impulse 
-    DO NOT CALL THIS DIRECTLY. INSTEAD, USE flowField.evolveField() to produce a flowField instance
+    Return Fourier coeffs a complete set of Fourier modes for a single forcing and time
+    DO NOT CALL THIS DIRECTLY. Call from flowField.evolveImpulse() which returns a flowField instance.
     Inputs:
         Compulsory args:
-            t: time
+            aArr, bArr, t: wavenumber sets and time
         keyword args:
-            fsAmp (=None):      Relative amplitudes of fx, fy, fz, np.ndarray of size 3
+            fsAmp (=None):      Relative amplitudes of fx, fy, fz, of size 3
                                     If not supplied, use [[1,0,0]]
                                     The total energy in [fx,fy,fz] will be normalized
             linInst (=None):    Instance of class linearize(). 
@@ -302,18 +277,86 @@ def evolveImpulse(t, linInst=None,modeDict=None, eddy=False,
                                     keys:   'fs' 
                                     If 'fs' is not supplied, use
                                         'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
-            aArr (=None):   streamwise wavenumbers
-            bArr (=None):   spanwise wavenumber
-            energyFile (=None): If aArr and/or bArr are not supplied, use energyArr in this file 
-                                    to decide on aArr and bArr to use
-            relTol (=1.e-04):   If using energyFile, truncate aArr and bArr where energy goes below relTol
     Outputs:
-            ff :    flowField instance
-            impulseArgs: dict with keys 
+            outDict: dict with keys 
+                        'coeffArr'
                         'fs', 'y0', 'eps', 'a', 'b', 'tArr', 'N', 'Re', 'turb', 'eddy','fsAmp'
                         If 'fs' was supplied as input to function, set y0 and eps to None
     """
-    pass
+    #=====================================================================
+    # Warn if aArr or bArr are not of the right form 
+    #===========================
+    a0 = np.min(np.abs(aArr[np.nonzero(aArr)])) 
+    b0 = np.min(np.abs(bArr[np.nonzero(bArr)])) 
+    aArr = aArr.sort(); bArr = bArr.sort()
+    if not _areSame(aArr, a0*np.arange(-(aArr.size//2), aArr.size//2)):
+        print("aArr isn't in ifft order... Have a look, aArr/a0 is:", aArr/a0)
+    if not _areSame(bArr, b0*np.arange( bArr.size)):
+        print("bArr isn't in ifft order... Have a look, bArr/b0 is:", bArr/b0)
+
+
+    ################################
+    if linInst is None :
+        # Ensure modeDict has entries for N and Re. turb defaults to False 
+        assert set(( 'N','Re' )) <= set(modeDict)
+        modeDict['turb'] = modeDict.get('turb', False)
+        linInst = ops.linearize(flowClass='channel', **modeDict)
+    N = linInst.N
+    W = linInst.weightDict['W1']   
+    w = linInst.w
+    
+    #=================================================================
+    # Forcing vector 
+    #==============
+    # Function to build Fs from fsAmp[k]
+    if fsAmp is None : 
+        warn("fsAmp not supplied, using [1,0,0]...")
+
+    if impulseArgs is None :
+        impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
+    else :
+        impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
+    fsDict = _fs(fsAmp=fsAmp, **impulseArgs)
+    fs = fsDict['fs']; 
+    fs = fs.reshape((3*N,1))  
+    Fs = B @ fs
+
+    #====================================================================
+    # Define a function to handle mode-wise evolution to save space later
+    #=======================
+    # Construct system matrices for the dynamical system:
+    #   d_t psi  = A  psi + B @ fs  delta(t)
+    #   [u, v, w]= C  psi ,         where psi = [v, omega_y] 
+    # So that [u v w] = C @ (e^{At}) @ Fs, and similarly for v, w 
+    def modewiseEvolve(a,b):
+        systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
+        A = systemDict['A']
+        C = systemDict['C']; 
+        return (C @ expm(A*t) @ Fs).flatten()
+
+    
+    #==================================================================
+    # Define arrays and do the looping 
+    #==================
+    coeffArr = np.zeros((aArr.size, bArr.size, 3*N), dtype=np.complex)
+
+    for i0 in range(aArr.size):
+        a = aArr[i0]
+        for i1 in range(bArr.size):
+            b = bArr[i1]
+            if (a==0) and (b==0): 
+                continue
+
+            coeffArr[i0,i1] = modewiseEvolve(a,b)
+
+    if impulseArgs is None : impulseArgs = {}
+    impulseArgs.update(fsDict)
+    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'a':a, 'b':b, 'tArr':tArr,\
+            'turb':(linInst.flowState=='turb'), 'eddy':eddy })
+    outDict.update(impulseArgs)
+    outDict.update({'coeffArr':coeffArr})
+
+    return outDict 
 
 
 
