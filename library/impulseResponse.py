@@ -5,134 +5,143 @@ and return the Fourier coefficients or energy at that particular time.
 Also, H2norms for inifinite time and finite time horizons.
 """
 import numpy as np
+from numpy.linalg import matrix_power
 import ops
 import pseudo
 from warnings import warn
 from scipy.linalg import expm, solve_sylvester
 from scipy.sparse.linalg import expm_multiply
+import pdb
+from miscUtil import _arrGCD, _floatGCD, _areSame, _nearestEntry, _nearestInd
 
-def impulseVec(a,b,**kwargs):
-    """ Generate 3C impulse vector Fs (see sec. 10.1 of Jovanovic's thesis) from wall=normal profile 'fs' 
-    Inputs:
-        a,b:    Streamwise and spanwise wavenumbers 
-        kwargs with keys 
-            fs:     Wall-normal profile for impulse; if not supplied, build using keys
-            y0, eps, N: location of impulse, wall-normal size of impulse, size of Chebysev collocation vector. Defaults are -0.9, 1/2000, 251
-            DeltaInv: 
-                    Inverse of the matrix (D2 - (a^2+b^2)I)
-    Outputs:
-        impulseDict with keys
-            Fs_4x2N, Fsadj_4x2N, a, b, DeltaInv
-            (computing Fs isn't very expensive. So ALWAYS compute for x,y,z,xyz)
-
-    """
-    # Need fs, DeltaInv, and impulseDir to compute Fs and FsAdj
-    # Compute fs if not supplied:
-    if 'fs' not in kwargs:
-        warn("fs not supplied. Building it using y0, eps...")
-        if 'y0' not in kwargs: y0 = -0.9; warn("y0 not supplied. Using -0.9...")
-        else: y0 = kwargs['y0']
-        if 'eps' not in kwargs: eps = 1./2000.; warn("eps not supplied. Using 1/2000...")
-        else: eps = kwargs['eps']
+def _fs0(**kwargs):
+    if kwargs.get('turb', True):
+        # Turbulent case
+        if 'Re' not in kwargs: Re = 2000.; warn("Re not supplied. Using 2000...")
+        else : Re = kwargs['Re']
+        if 'y0' not in kwargs: 
+            y0plus =200.;
+            y0 = -1. + y0plus/Re
+            warn("y0 not supplied. Using %.3g so that y0^+=200..."%y0)
+        else : y0 = kwargs['y0']
+        if 'eps' not in kwargs: eps = 50.; warn("eps not supplied. Using 50...")
+        else : eps = kwargs['eps']
         if 'N' not in kwargs: N = 251; warn("N not supplied. Using 251...")
-        else: N = kwargs['N']
+        else : N = kwargs['N']
 
         y, DM = pseudo.chebdif(N,2)
-        fs = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
-    else: 
-        fs = kwargs['fs']
-        N = fs.size
-    
-    I1 = np.identity(N); Z1 = np.zeros(N,dtype=np.complex)
-    k2 = a**2 + b**2
-    
-    # Compute DeltaInv if not supplied
-    if 'DeltaInv' not in kwargs:
-        if ('D2' not in vars()): 
-            DM = pseudo.chebdif(N,2)[1]
-            D1 = DM[:,:,0]; D2 = DM[:,:,1]
-        DeltaInv = np.linalg.solve( D2 - k2*I1, I1)
-    else:
-        DeltaInv = kwargs['DeltaInv']
-    
-    if 'D1' in kwargs: D1 = kwargs['D1']
-    if 'D1' not in vars():
-        DM = pseudo.chebdif(N,2)[1]
-        D1 = DM[:,:,0]
+        fs0 = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(- (Re*(y-y0))**2 / 4./eps )
+    else :
+        # For laminar case, use the impulse of Jovanovic's thesis
+        if 'Re' not in kwargs: Re = 2000.; warn("Re not supplied. Using 2000...")
+        else : Re = kwargs['Re']
+        if 'y0' not in kwargs: 
+            y0 = -0.9 
+            warn("y0 not supplied. Using %.3g..."%y0)
+        else : y0 = kwargs['y0']
+        if 'eps' not in kwargs: eps = 1/2000.; warn("eps not supplied. Using %.3g..."%eps)
+        else : eps = kwargs['eps']
+        if 'N' not in kwargs: N = 41; warn("N not supplied. Using %d..."%N)
+        else : N = kwargs['N']
+        y, DM = pseudo.chebdif(N,2)
+        fs0 = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
+    fsDict = {'N':N, 'Re':Re, 'y0':y0, 'eps':eps, 'fs0':fs0, 'y':y, 'DM':DM}
+    fsDict.update(kwargs)
+    return fsDict
+
+def _fs(fsAmp=None, **kwargs):
+    fsDict = _fs0(**kwargs)
+    fs0 = fsDict['fs0']
+    if fsAmp is None : fsAmp = np.array([1.,0.,0.]) # [1*fs0, 0*fs0, 0*fs0]
+    fsAmp = fsAmp.reshape(( fsAmp.size//3, 3))
+    fs = np.zeros((fsAmp.shape[0], 3*fs0.size))
+
+    w = pseudo.clencurt(fs0.size); w3 = np.concatenate((w,w,w))
+    normalize = lambda arr : arr/ np.sqrt( w3 @ (np.abs(arr)**2 ))
+
+    for m in range(fsAmp.shape[0]):
+        amps = fsAmp[m]
+        fs[m] = np.concatenate(( amps[0]*fs0, amps[1]*fs0, amps[2]*fs0 ))
+        fs[m] = normalize(fs[m])
+    fsDict.update({'fsAmp':fsAmp, 'fs':fs})
+    return fsDict
 
 
-    # Now to make Fs and FsAdj 
-    Fs = np.zeros((4, 2*N),dtype=np.complex); FsAdj = Fs.copy()
-    # Need Clenshaw-Curtis weights to define the adjoint of Fs
-    weights = pseudo.clencurt(N)
-    W2 = np.diag( np.concatenate((weights,weights)) )
-
-    # Impulse along 'x'
-    Fs[0,:N] = -1.j*a*DeltaInv @ (D1 @ fs) 
-    Fs[0, N:]= 1.j*b*fs
-    FsAdj[0] = (1./k2) *  np.concatenate(( -1.j*a*D1@fs, -1.j*b*fs  ))
-
-    # Impulse along 'y'
-    Fs[1,:N] =  -(a**2+b**2)*DeltaInv @ fs 
-    # Doesn't contribute to forcing omega_y
-    FsAdj[1] = np.concatenate(( fs, Z1 ))
-
-    # Impulse along 'z'
-    Fs[2,:N] = -1.j*b*DeltaInv @ (D1 @ fs) 
-    Fs[2,N:] = -1.j*a*fs
-    FsAdj[2] = (1./k2) *  np.concatenate(( -1.j*b*D1@fs,  1.j*a*fs  ))
-
-    for k in range(3):
-        FsAdj[k] = W2 @ FsAdj[k]
-
-    Fs[3] = Fs[0] + Fs[1] + Fs[2]
-    FsAdj[3] = FsAdj[0] + FsAdj[1] + FsAdj[2]
 
 
-    return {'Fs':Fs, 'FsAdj':FsAdj, 'a':a, 'b':b,  'DeltaInv':DeltaInv}
-
-def _floatGCD(a,b,reltol=1.e-05, abstol=1.e-09):
-    t = min(a, b)
-    while b > reltol*t + abstol:
-        a, b = b, a%b
-    return a
-
-def _arrGCD(arr, tol = 1.e-09 ):
-    arr = np.array([arr]).flatten()
-    assert (arr > 0.).all()
-    if np.linalg.norm( ( arr + tol ) % arr[0] ) < 10.* arr.size * tol:
-        return arr[0]
-    else:
-        gcdEst = arr[0] 
-        for ind in range(1, arr.size):
-            gcdEst = _floatGCD( gcdEst, arr[ind] )
-        return gcdEst
-        
-
-
-def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=None,printOut=False):
-    """ Returns the Fourier coefficients (and energy) for u,v,w at a specified Fourier mode and time.
-    Inputs:
-        a, b    :      Streamwise and spanwise wavenumbers
-        tArr    :      Array containing times at which responses are requested
-        linInst(=None): Instance of ops.linearize
-        modeDict(=None):Dictionary containing 'N' (number of wall-normal nodes), Re, and either 'turb'=True/False 
-        eddy (=False):  If True, use eddy viscosity
-        impulseArgs with entries (by priority):
-            Fs (=None): Forcing function, 3C vector (see sec. 10.1 in Jovanovic's thesis) of size 3N
-            Fsadj(=None): Adjoint of the forcing function
-                    both of them need to be supplied. If either of them s not supplied,
-            fs (=None): Forcing profile for each direction, of size N 
-            y0, eps : Define the shape of the impulse (along any direction as)
-                fs = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
-
-    Outputs:
-        outDict with keys
-            a, b, tArr, N, Re, turb (bool), eddy, impulseDict: all of the input arguments, and
-            coeffArr: Fourier coefficients at time t
-            energyArr : Energy in u, v, w at time t
+def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy=False, impulseArgs=None,printOut=False):
     """
-    if linInst is None:
+    Return energy and Fourier coeffs (if requested) for a single Fourier mode for different combinations of forcing at different times We're using the same shape for the impulse in y for each of x,y,z, but changing the relative amplitudes of fx, fy, fz. 
+    Inputs:
+        Compulsory args:
+            a, b, tArr: wavenumbers and time
+        keyword args:
+            fsAmp (=None):      Relative amplitudes of fx, fy, fz, of shape (m,3)
+                                    If not supplied, use [[1,0,0]]
+                                    The total energy in [fx,fy,fz] will be normalized
+            coeffs (=False):    If True, return Fourier coeffs as well
+            linInst (=None):    Instance of class linearize(). 
+            modeDict (=None):   If linInst is not supplied, use modeDict to build linInst
+                                    keys:   'N', 'Re', 'turb'
+            eddy (=False):      If True, use eddy viscosity
+            impulseArgs (=None):Build impulse function (wall-normal using this)
+                                    keys:   'fs' 
+                                    If 'fs' is not supplied, use
+                                        'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
+    Outputs:
+            outDict: dict with keys 
+                        'energyArr', 'coeffArr' (if input kwargs 'coeffs' is True)
+                        'fs', 'y0', 'eps', 'a', 'b', 'tArr', 'N', 'Re', 'turb', 'eddy','fsAmp'
+                        If 'fs' was supplied as input to function, set y0 and eps to None
+    """
+
+    #=====================================================================
+    # Figure out if tArr is uniformly/linearly spaced or not 
+    #===========================
+
+    # If tArr is uniformly spaced, then e^{A.n.dt} = e^{A.dt} @ e^{A.(n-1).dt} can be used
+    # If this isn't the case, but tArr is still integral multiples of some dt, then 
+    #       at least e^{A.n.dt} = (e^{A.dt})^n can be used
+    # If neither is true, just do e^{A.t} = expm(A*t)
+    tArr = np.array([tArr]).flatten()
+    t0 =np.min(tArr) ;
+    assert (tArr >= 0.).all()
+    if _areSame(tArr, t0*np.arange(tArr.size) ): 
+        uniformTime = True; linearTime = True
+        tGCD = t0
+    else :
+        tGCD = _arrGCD(tArr)
+        # If I have to raise e^{A.dt} to very large powers, it's not worth it
+        if tGCD//t0 <= 5:
+            uniformTime = False ; linearTime = True 
+        # so, if tGCD is significantly smaller than t0, treat tArr to not be linear and use expm() all the time
+        else : uniformTime = False; linearTime = False
+    # These aren't used until the final loop where expFactor is calculated
+
+    #=====================================================================
+    # Decide if forcings are handled directly or a 3d basis is used
+    #=========================
+    if fsAmp is None:
+        fsAmp = np.array([1,1,1]).reshape((1,3))
+    else :
+        fsAmp = np.array(fsAmp).reshape(( fsAmp.size//3, 3 ))
+
+    # Because of linearity, I don't need to compute for different fs arrangements
+    # Its sufficient to compute for fs =[fs0;0;0], [0;fs0;0], [0;0;fs0], 
+    #   and then superpose the velocity fields 
+    # Computing energy from superposed velocity fields is trivial
+    if fsAmp.shape[0] > 3:
+        useBasis = True
+        fsAmp0 = np.array([1.,0.,0., 0.,1.,0., 0.,0.,1.]).reshape((3,3))
+    else :
+        useBasis = False
+        fsAmp0 = fsAmp
+
+
+    #====================================================================
+    # System matrices
+    #=======================
+    if linInst is None :
         # Ensure modeDict has entries for N and Re. turb defaults to False 
         assert set(( 'N','Re' )) <= set(modeDict)
         modeDict['turb'] = modeDict.get('turb', False)
@@ -140,83 +149,214 @@ def timeMap(a,b,tArr=None, linInst=None,modeDict=None, eddy=False, impulseArgs=N
     N = linInst.N
     
     # Construct system matrices for the dynamical system:
-    #   d_t psi  = A  psi + Fs  delta(t)
+    #   d_t psi  = A  psi + B @ fs  delta(t)
     #   [u, v, w]= C  psi ,         where psi = [v, omega_y] 
+    # or
+    #   u = C_u psi;    v = C_v psi;    w = C_w psi
+    # So that u(t) = C_u @ (e^{A(t/n)})^n @ B @ fs, and similarly for v, w 
+    systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
+    A = systemDict['A']
+    C = systemDict['C']; 
+    B = systemDict['B']; 
+    W = linInst.weightDict['W1']   
+    w = linInst.w
+    
+    #=================================================================
+    # Forcing vectors 
+    #==============
+    # Function to build Fs for each fsAmp[k]
+    if impulseArgs is None :
+        impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
+    else :
+        impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
+    fsDict = _fs(fsAmp=fsAmp0, **impulseArgs)
+    fs = fsDict['fs']; 
+    fs = fs.T   # _fs returns fs so that fs[k] refers to a particular forcing, i.e. shape mx 3N
+    # We want fs to a matrix of shape 3Nxm, so that B@fs is shape 2Nxm, and final u(t) is shape 3Nxm
+    Fs = B @ fs
 
-    systemDict = linInst.makeSystem(a=a, b=b, adjoint=True, eddy=eddy)
-    A = systemDict['A']; Aadj = systemDict['Aadj']
-    C = systemDict['C']; Cadj = systemDict['Cadj']
-    DeltaInv = systemDict['DeltaInv']
-    # DeltaInv is the inverse of the matrix (D2- (a**2+b**2)I)
+    if useBasis: 
+        # To ensure I don't mess up the weighting factors, 
+        # I want forcing to have magnitude unity, i.e. ||fs|| = 1
+        # Let's denote such forcing with fs~
+        # fs~ = fs/||fs|| = [Ax*fs0,Ay*fs0,Az*fs0]/||fs||, where ||fs|| = ||fs0|| sqrt{Ax^2+Ay^2+Az^2} = ||fs0|| |A|
+        # Since fx~ = [fs0~;0;0] , fy~ = [0;fs0~;0] and fz~ = [0;0;fs0~], I can write fs~ as
+        # fs~ = Ax/|A| fx~ + Ay/|A| fy~ + Az/|A| fz~
+        # Ignore the abuse of notation for the amplitude A here..
+        fsAmpNorm = np.sqrt(np.sum(fsAmp**2, axis=1)).reshape((fsAmp.shape[0],1))
+        scaleFactors = fsAmp/fsAmpNorm  # scaleFactors[k] is [Ax/|A|, Ay/|A|, Az/|A|]
+        scaleFactors = scaleFactors.T   # Make it of shape 3 x m, to allow
+        #                               [ a1x; a2x; a3x; a4x;...]_3xm
+        # us_3Nxm = [ux; uy; uz]_3Nx3   [ a1y; a2y; a3y; a4y;...]_3xm
+        #                               [ a1z; a2z; a3z; a4z;...]_3xm
+        # where a1x = Ax/|A| for the first forcing, a2x for the second forcing, and so on..
+    
 
-    # Build Impulse forcing vector Fs in the evolution equation if not supplied
-    # FsAdj is also needed, for calculating the energy. 
-    # Ideally, I can compute the energy directly from the velocity mode, but
-    #   because of the messed up convention of using the weird Q matrix, I need this
-    if impulseArgs is None: 
-        warn("impulseArgs not supplied. Using impulse with y0=-0.9,eps=1/2000 ...")
-        impulseArgs = {'N':N, 'y0':-0.9, 'eps':1./2000.}
-        impulseDict = impulseVec(a,b,**impulseArgs)
-    elif ('Fs' not in impulseArgs) or ('FsAdj' not in impulseArgs):
-        impulseArgs['N'] = N
-        assert ( set(('N', 'y0','eps')) <= set(impulseArgs) ) or ( 'fs' in impulseArgs ),\
-                "Need either fs or (N,y0,eps) to build impulse vectors Fs, FsAdj"
-        # I have DeltaInv and D1 from systemDict and linInst, so..
-        impulseArgs.pop('DeltaInv',None); impulseArgs.pop('D1',None)
-        impulseDict = impulseVec(a,b,DeltaInv=DeltaInv,D1=linInst.D1, **impulseArgs )
-    else: 
-        impulseDict = {'Fs':impulseArgs['Fs'], 'FsAdj':impulseArgs['FsAdj'], 'a':a, 'b':b, 'DeltaInv':DeltaInv}
-    Fs = impulseDict['Fs']
-    FsAdj = impulseDict['FsAdj']
-    assert Fs.shape[1] == 2*N
 
-    if tArr is None: tArr = np.array([1.])
-    if printOut:
-        print("Computing impulse response for times ",tArr)
+    #==================================================================
+    # last bits of preparation
+    #==================
+    # Build energyArr by looping over fs.shape[0] and tArr
+    energyArr = np.zeros((tArr.size,3, fsAmp.shape[0]))
+    expFactor = np.identity(2*N, dtype=np.complex) 
+    fs = fs.reshape((fs.size//(3*N), 3*N )).T   
+    # So that fs is a matrix of shape 3N x m, allowing matrix multiplication u(t;fs) = C e^{At} B fs_{3N,m}
+    if coeffs: coeffArr = np.zeros(( tArr.size, 3*N, fsAmp.shape[0]), dtype=np.complex)
+    w1 = w.reshape((1,N))   # w1 is ClenCurt weight matrix, reshaped to a row vector
+    def uvwEnergies(arr):
+        # Use 2d arr, of shape 3Nx m
+        returnArr = np.zeros((3, arr.shape[1]))
+        returnArr[0:1] = w1@(np.abs(arr[:N])**2)
+        returnArr[1:2] = w1@(np.abs(arr[N:2*N])**2) 
+        returnArr[2:3] = w1@(np.abs(arr[2*N:])**2)
+        return returnArr
 
-   
-    # At each time 't', and for 4 impulse cases (x, y, z, xyz), 3 components and 3 energies
-    tol = 1.e-09
-    # If tArr is tArr[0] * [1:n], then get e^{A * nt} as e^{At} @ e^{A(n-1)t}
-    if np.linalg.norm( tArr[0]*np.arange(1,tArr.size+1) - tArr ) < tol * tArr.size :
-        coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
-        expFactor = expm(tArr[0] * A) 
-        coeffArr[0] = expFactor @ Fs.T
-        for i0 in range(1, tArr.size):
-            coeffArr[i0] = expFactor @ coeffArr[i0-1]
-        coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
-    else:
-        # If entries of tArr are integral multiples of some number close enough to tArr[0],
-        #   calculate e^{A t_0}, and then raise it to integral powers
-        gcdEst = _arrGCD(tArr)
-        if tArr[0] < 50 * gcdEst:
-            coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
-            tArrFac = np.int(np.round( tArr/gcdEst )) 
-            for i0 in range(tArr.size):
-                expFactor0 = np.matrix(expm(t*A))
-                coeffArr[i0] =  (expFactor0**tArrFac[i0]) @ Fs.T 
-            coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
-        else:
-            # worst case, 
-            coeffArr = np.zeros( (tArr.size, 2*N, 4), dtype=np.complex )
-            for i0 in range(tArr.size):
-                coeffArr[i0] = expm(tArr[i0]*A)  @ Fs.T 
-            coeffArr = C.reshape((1,3*N,2*N)) @ coeffArr
+    #==============================================================
+    # And here we go...
+    #======================
+    if linearTime:
+        expFactor0  = expm(A*t0)
+    for i0 in range(tArr.size):
+        if uniformTime:
+            expFactor = expFactor @ expFactor0 
+        elif linearTime:
+            expFactor = matrix_power(expFactor0, int(round(tArr[i0]/tGCD)) )
+        else :
+            expFactor = expm(A * tArr[i0])
 
-    coeffArr = np.swapaxes(coeffArr, axis1=1, axis2=2)
+        tmpArr = C @ expFactor @ Fs     # This is a matrix of shape 3N x m 
+        # Each column of tmpArr corresponds to field due to a forcing, fsAmp0[m]
+        if not useBasis:
+            # If I'm not computing for too many kinds of forcing, I don't have to split into Fx, Fy, and Fz and then superpose
+            # For such cases, just calculate individually
+            energyArr[i0] = uvwEnergies(tmpArr)
+            if coeffs: coeffArr[i0] = tmpArr.copy()
+        else :
+            assert tmpArr.shape[1] == 3, " Need 3d basis for forcing along x,y,z"
+            # When using too many forcings, first compute velocity fields individually for Fx, Fy, Fz
+            # Now, compute velocity fields for each forcing given by fsAmp 
+            # Need to be careful about how I weight each of these fields
+            velVec = tmpArr @ scaleFactors 
+            energyArr[i0] = uvwEnergies(velVec)
+            if coeffs: coeffArr[i0] = velVec.copy()
 
-    # Don't really need the adjoints and all that to compute energy since coeffArr are for [u,v,w]. A plain old chebnorm is enough
-    energyArr = np.zeros((tArr.size, 4,4))
-    w = pseudo.clencurt(N).reshape((1,1,1,N))
-    energyArr[:,:,:3] = np.sum( w * ( coeffArr.reshape((tArr.size,4,3,N)) * coeffArr.conj().reshape((tArr.size, 4, 3, N))  ), axis=-1 )
-    energyArr[:,:,3] = np.sum(energyArr[:,:,:3], axis=-1 )
+    #===================================================================
+    # Prepare dict to return...
+    #===========================
+    if impulseArgs is None : impulseArgs = {}
+    impulseArgs.update(fsDict)
+    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'a':a, 'b':b, 'tArr':tArr,\
+            'turb':(linInst.flowState=='turb'), 'eddy':eddy })
+    outDict = {'energyArr':energyArr}
+    outDict.update(impulseArgs)
+    if coeffs: outDict.update({'coeffArr':coeffArr})
+
+    return outDict 
+
+
+
+
+
+def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
+        fsAmp=None, impulseArgs=None):
+    """
+    Return Fourier coeffs a complete set of Fourier modes for a single forcing and time
+    DO NOT CALL THIS DIRECTLY. Call from flowField.evolveImpulse() which returns a flowField instance.
+    Inputs:
+        Compulsory args:
+            aArr, bArr, t: wavenumber sets and time
+        keyword args:
+            fsAmp (=None):      Relative amplitudes of fx, fy, fz, of size 3
+                                    If not supplied, use [[1,0,0]]
+                                    The total energy in [fx,fy,fz] will be normalized
+            linInst (=None):    Instance of class linearize(). 
+            modeDict (=None):   If linInst is not supplied, use modeDict to build linInst
+                                    keys:   'N', 'Re', 'turb'
+            eddy (=False):      If True, use eddy viscosity
+            impulseArgs (=None):Build impulse function (wall-normal using this)
+                                    keys:   'fs' 
+                                    If 'fs' is not supplied, use
+                                        'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
+    Outputs:
+            outDict: dict with keys 
+                        'coeffArr'
+                        'fs', 'y0', 'eps', 'a', 'b', 'tArr', 'N', 'Re', 'turb', 'eddy','fsAmp'
+                        If 'fs' was supplied as input to function, set y0 and eps to None
+    """
+    #=====================================================================
+    # Warn if aArr or bArr are not of the right form 
+    #===========================
+    a0 = np.min(np.abs(aArr[np.nonzero(aArr)])) 
+    b0 = np.min(np.abs(bArr[np.nonzero(bArr)])) 
+    aArr = aArr.sort(); bArr = bArr.sort()
+    if not _areSame(aArr, a0*np.arange(-(aArr.size//2), aArr.size//2)):
+        print("aArr isn't in ifft order... Have a look, aArr/a0 is:", aArr/a0)
+    if not _areSame(bArr, b0*np.arange( bArr.size)):
+        print("bArr isn't in ifft order... Have a look, bArr/b0 is:", bArr/b0)
+
+
+    ################################
+    if linInst is None :
+        # Ensure modeDict has entries for N and Re. turb defaults to False 
+        assert set(( 'N','Re' )) <= set(modeDict)
+        modeDict['turb'] = modeDict.get('turb', False)
+        linInst = ops.linearize(flowClass='channel', **modeDict)
+    N = linInst.N
+    W = linInst.weightDict['W1']   
+    w = linInst.w
+    
+    #=================================================================
+    # Forcing vector 
+    #==============
+    # Function to build Fs from fsAmp[k]
+    if fsAmp is None : 
+        warn("fsAmp not supplied, using [1,0,0]...")
+
+    if impulseArgs is None :
+        impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
+    else :
+        impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
+    fsDict = _fs(fsAmp=fsAmp, **impulseArgs)
+    fs = fsDict['fs']; 
+    fs = fs.reshape((3*N,1))  
+    Fs = B @ fs
+
+    #====================================================================
+    # Define a function to handle mode-wise evolution to save space later
+    #=======================
+    # Construct system matrices for the dynamical system:
+    #   d_t psi  = A  psi + B @ fs  delta(t)
+    #   [u, v, w]= C  psi ,         where psi = [v, omega_y] 
+    # So that [u v w] = C @ (e^{At}) @ Fs, and similarly for v, w 
+    def modewiseEvolve(a,b):
+        systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
+        A = systemDict['A']
+        C = systemDict['C']; 
+        return (C @ expm(A*t) @ Fs).flatten()
 
     
-    outDict = {'a':a, 'b':b, 'tArr':tArr, \
-            'N':linInst.N, 'Re':linInst.Re, 'turb':linInst.flowState, \
-            'eddy':eddy, 'impulseDict':impulseDict, 'coeffArr':coeffArr, 'energyArr':energyArr}
-    return  outDict
+    #==================================================================
+    # Define arrays and do the looping 
+    #==================
+    coeffArr = np.zeros((aArr.size, bArr.size, 3*N), dtype=np.complex)
 
+    for i0 in range(aArr.size):
+        a = aArr[i0]
+        for i1 in range(bArr.size):
+            b = bArr[i1]
+            if (a==0) and (b==0): 
+                continue
+
+            coeffArr[i0,i1] = modewiseEvolve(a,b)
+
+    if impulseArgs is None : impulseArgs = {}
+    impulseArgs.update(fsDict)
+    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'a':a, 'b':b, 'tArr':tArr,\
+            'turb':(linInst.flowState=='turb'), 'eddy':eddy })
+    outDict.update(impulseArgs)
+    outDict.update({'coeffArr':coeffArr})
+
+    return outDict 
 
 
 
@@ -241,7 +381,7 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
     if (tau is not None) and (tau > 0.):
         print("Using exponential discounting for finite time horizon, over tau=", tau)
         diffA = -(1./tau)* I2
-    else: diffA = 0.*I2
+    else : diffA = 0.*I2
 
     fsArr = np.zeros((epsArr.size, y0Arr.size, N)) # This doesn't change much
     y = linInst.y

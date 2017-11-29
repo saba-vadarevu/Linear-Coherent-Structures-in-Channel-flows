@@ -35,7 +35,7 @@ class linearize(object):
             d2U(=None)  :   d2U/dy2
             Re (=2000.) :   Reynolds number (friction based whenever U is normalized by friction velocity)
             flowClass(="channel")   : "channel", "couette", or "bl"
-            kwargs['turb'] (=False): If True, initialized with turbulent base flow; Default is laminar.
+            kwargs['turb'] (=True): If True, initialized with turbulent base flow; Default is laminar.
                                     Turbulent flow can only be initialized for channel flow currently.
 
         Attributes: 
@@ -92,7 +92,7 @@ class linearize(object):
         if (U is None):
             if flowClass == "channel":
                 U = 1. - self.y**2; dU = -2.*self.y; d2U = -2.*np.ones(U.size)
-                if kwargs.get('turb',False):
+                if kwargs.get('turb',True):
                     turbDict = turbMeanChannel(N=N,Re=Re)
                     U = turbDict['U']; dU = turbDict['dU']; d2U = turbDict['d2U']
                     flowState = 'turb'

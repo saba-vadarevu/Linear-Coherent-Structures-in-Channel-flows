@@ -43,6 +43,7 @@ import pseudo
 import impulseResponse as impres
 import ops
 import pdb
+from miscUtil import _areSame, _nearestEntry, _nearestInd
 #from pseudo.py import chebint
 
 
@@ -91,7 +92,55 @@ def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
 
     return impulseDict
 
-            
+def evolveImpulse(aArr0, bArr0, N, t, flowDict=defaultDict, impulseArgs=None,fsAmp=None):
+    """
+    Generate flowField for just one time and one forcing
+        For multiple times and forcings, use impulseResponse()
+    Inputs:
+        aArr0:   Set of streamwise wavenumbers (>=0)
+        bArr0:   Set of spanwise wavenumbers (>=0). 
+                    These are extended to cover the other 3 quadrants in a-b plane
+                        when printing physical fields
+        N:      Number of wall-normal nodes
+        t:      Time (non-dimensionalized by U-normalization and channel half height)
+        flowDict (=defaultDict):
+                Contains keys:
+                Re (=2000):     Reynolds number
+                flowClass (='channel'):  'channel'/'couette'/'bl'
+                flowState (='turb')   :  'lam'/'turb'
+                eddy (=False):  True/False
+        impulseArgs (=None):
+                see kwarg impulseArgs to impulseResponse.timeMap()
+        fsAmp:  Magnitudes ax,ay,az in forcing [ax*fs0; ay*fs0; az*fs0] 
+                    This vector is then normalized
+                    Convention is to have smallest non-zero number of ax,ay,az to be +/-1
+    Outputs:
+        ff: flowField instance
+        outDict with keys relating to impulseArgs, to keep track of what was done  
+    """
+    aArr0 = aArr0.flatten() ; bArr0 = bArr0.flatten()
+    a0 = np.min(np.abs(aArr0[np.nonzero(aArr0)])) 
+    b0 = np.min(np.abs(bArr0[np.nonzero(bArr0)])) 
+    aArr = a0 * (- (aArr0.size//2) + np.arange( aArr0.size) )
+    bArr = b0 * np.arange(bArr0.size)
+    if not _areSame(aArr0,aArr):
+        print("The aArr that was supplied isn't of good form, rebuilding it...")
+    if not _areSame(bArr0,bArr):
+        print("The bArr that was supplied isn't of good form, rebuilding it...")
+
+    linInst = ops.linearize(N=N, flowClass='channel',
+            Re=flowDict['Re'],turb=(flowDict['flowState']=='turb') )
+
+    
+    outDict = impres.evolveField(aArr, bArr, t, linInst=linInst,eddy=flowDict['eddy'],
+            fsAmp=fsAmp, impulseArgs=impulseArgs)
+    flowDict.update({'eddy':eddy})
+
+    ff = flowField(aArr, bArr,N, flowDict=flowDict)
+
+    ff[:] = outDict.pop('coeffArr')
+
+    return ff, outDict
 
     
 
@@ -879,6 +928,14 @@ class flowField(np.ndarray):
                 saveDict.update({'vorz':physDict['arrPhys']} )
                 savedList.append('vorz')
         
+        a0 = self.aArr[1]; b0 = self.bArr[1]; Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        turbInt = (2./Lx/Lz)* np.sum( np.sum( self.conj() * self, axis=1), axis = 0 ) 
+        uvInt = (2./Lx/Lz)* np.sum( np.sum( self[:,:,0].conj() * self[:,:,1], axis=1), axis = 0 ).reshape((1,self.N))
+        turbInt = np.concatenate(( turbInt, uvInt), axis=0)
+
+        saveDict.update({'turbInt':turbInt})
+        
+
         if len(saveDict.keys()) == 0:
             warn("Looks like there were no acceptable strings in fieldList:"+str(fieldList))
         else :
