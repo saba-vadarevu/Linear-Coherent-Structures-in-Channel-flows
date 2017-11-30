@@ -134,11 +134,11 @@ def evolveImpulse(aArr0, bArr0, N, t, flowDict=defaultDict, impulseArgs=None,fsA
     
     outDict = impres.evolveField(aArr, bArr, t, linInst=linInst,eddy=flowDict['eddy'],
             fsAmp=fsAmp, impulseArgs=impulseArgs)
-    flowDict.update({'eddy':eddy})
-
+    flowDict.update({'t':t})
     ff = flowField(aArr, bArr,N, flowDict=flowDict)
+    ff.flowDict['t'] = t
 
-    ff[:] = outDict.pop('coeffArr')
+    ff[:] = outDict.pop('coeffArr').reshape(ff.shape)
 
     return ff, outDict
 
@@ -220,36 +220,65 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
         for tInd in range(tArr.size):
             t = tArr[tInd]
             ff = FxList[tInd] 
+            ff.flowDict['t'] = t
             ff.saveff(fPrefix+"_Fx_t%05d"%(round(100.*t)))
             ff = FyList[tInd] 
+            ff.flowDict['t'] = t
             ff.saveff(fPrefix+"_Fy_t%05d"%(round(100.*t)))
             ff = FzList[tInd] 
+            ff.flowDict['t'] = t
             ff.saveff(fPrefix+"_Fz_t%05d"%(round(100.*t)))
             ff = FxyzList[tInd]
+            ff.flowDict['t'] = t
             ff.saveff(fPrefix+"_Fxyz_t%05d"%(round(100.*t)))
     
     return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[0],'FxyzResponse':FxyzList[0]}
 
-def loadff(fName,printOut=False):
+def loadff(fName,printOut=True):
     if not fName.endswith('.mat'):
         fNamePrefix = fName.split('.')[0]
         fName = fNamePrefix +'.mat'
 
     loadDict =  loadmat(fName)
-    # Because loadmat formats scalars as arrays, 
-    flowDict = {'N': int(loadDict['N']), 'Re': float(loadDict['Re']), 't':float(loadDict['t']),\
-            'flowClass': str(loadDict['flowClass'][0]), 'flowState': str(loadDict['flowState'][0]), 'eddy': str(loadDict['eddy'][0]) }
+    if False :
+        # Because loadmat formats scalars as arrays, 
+        flowDict = {'N': int(loadDict['N']), 'Re': float(loadDict['Re']), 't':float(loadDict['t']),\
+                'flowClass': str(loadDict['flowClass'][0]), 'flowState': str(loadDict['flowState'][0]), 'eddy': str(loadDict['eddy'][0]) }
 
-    aArr = loadDict['aArr'].flatten(); bArr = loadDict['bArr'].flatten() 
-    N = flowDict['N']
+        aArr = loadDict['aArr'].flatten(); bArr = loadDict['bArr'].flatten() 
+        N = flowDict['N']
 
-    ff = flowField(aArr, bArr, N, flowDict=flowDict)
-    ff[:] = loadDict['ffArr']
+        ff = flowField(aArr, bArr, N, flowDict=flowDict)
+        ff[:] = loadDict['ffArr']
+    else :
+        # The mat files could have impulseArgs. To account for those, I'll split loadDict like so:
+        # First, all the arguments that should be strings
+        flowDict = {'flowClass': str(loadDict.pop('flowClass')[0]),\
+                'flowState': str(loadDict.pop('flowState')[0]), \
+                'eddy': str(loadDict.pop('eddy')[0]) }
+        # And the int
+        N =  int(loadDict.pop('N'))
+        # The remaining stuff should all be either floats or arrays
+        # The main arrays are aArr, bArr, and ffArr. Get them out first
+        aArr = loadDict.pop('aArr').flatten()
+        bArr = loadDict.pop('bArr').flatten()
+        ffArr = loadDict.pop('ffArr')
+        # Everything else should be either float or arr.  
+        for key in loadDict.keys():
+            # Save size 1 np.ndarrays as floats
+            if loadDict[key].size == 1 : flowDict[key] = float(loadDict.pop(key))
+            else : flowDict[key] = loadDict.pop(key).flatten()
+            # And others in flattened form
+       
+        # Finally: 
+        ff = flowField(aArr, bArr, N, flowDict=flowDict)
+        ff[:] = loadDict['ffArr'].reshape((aArr.size, bArr.size, 3, N))
 
     if printOut:
         print("Loaded flowField from ",fName)
 
     return ff
+
 
 def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1, **kwargs):
     """
@@ -449,13 +478,22 @@ class flowField(np.ndarray):
         self.weightDict = getattr(self,'weightDict',obj.weightDict)
         return
 
-    def saveff(self, fName):
-        """ Save flowField instance to .mat file"""
+    def saveff(self, fName, **kwargs):
+        """ Save flowField instance to .mat file
+        Inputs:
+            Compulsory args:
+                fName:  File name
+            kwargs:
+                Anything is accepted. kwargs will be directly saved to the .mat file
+                Particularly useful to pass impulseArgs
+        Outputs:
+            null """
         if not fName.endswith('.mat'):
             fNamePrefix = fName.split('.')[0]
             fName = fNamePrefix +'.mat'
         saveDict = {'aArr':self.aArr, 'bArr':self.bArr, 'N':self.N, 'U':self.U, 'ffArr':self.copyArray()}
         saveDict.update(self.flowDict)
+        saveDict.update(**kwargs)
 
         savemat(fName, saveDict)
         print("Saved flowField data to ",fName)
