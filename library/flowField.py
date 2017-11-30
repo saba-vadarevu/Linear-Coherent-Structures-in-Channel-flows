@@ -265,10 +265,11 @@ def loadff(fName,printOut=True):
         ffArr = loadDict.pop('ffArr')
         # Everything else should be either float or arr.  
         for key in loadDict.keys():
-            # Save size 1 np.ndarrays as floats
-            if loadDict[key].size == 1 : flowDict[key] = float(loadDict.pop(key))
-            else : flowDict[key] = loadDict.pop(key).flatten()
-            # And others in flattened form
+            if isinstance(loadDict[key], np.ndarray):
+                # Save size 1 np.ndarrays as floats
+                if loadDict[key].size == 1 : flowDict[key] = float(loadDict.pop(key))
+                else : flowDict[key] = loadDict.pop(key).flatten()
+                # And others in flattened form
        
         # Finally: 
         ff = flowField(aArr, bArr, N, flowDict=flowDict)
