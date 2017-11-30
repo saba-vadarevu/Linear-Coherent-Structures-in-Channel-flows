@@ -255,8 +255,6 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
 
 
 
-
-
 def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
         fsAmp=None, impulseArgs=None):
     """
@@ -288,7 +286,8 @@ def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
     #===========================
     a0 = np.min(np.abs(aArr[np.nonzero(aArr)])) 
     b0 = np.min(np.abs(bArr[np.nonzero(bArr)])) 
-    aArr = aArr.sort(); bArr = bArr.sort()
+    aArr.sort(); bArr.sort()
+    #pdb.set_trace()
     if not _areSame(aArr, a0*np.arange(-(aArr.size//2), aArr.size//2)):
         print("aArr isn't in ifft order... Have a look, aArr/a0 is:", aArr/a0)
     if not _areSame(bArr, b0*np.arange( bArr.size)):
@@ -316,10 +315,10 @@ def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
         impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
     else :
         impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
+    if 'fsAmp' in impulseArgs: impulseArgs.pop('fsAmp')
     fsDict = _fs(fsAmp=fsAmp, **impulseArgs)
     fs = fsDict['fs']; 
     fs = fs.reshape((3*N,1))  
-    Fs = B @ fs
 
     #====================================================================
     # Define a function to handle mode-wise evolution to save space later
@@ -330,9 +329,14 @@ def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
     # So that [u v w] = C @ (e^{At}) @ Fs, and similarly for v, w 
     def modewiseEvolve(a,b):
         systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
-        A = systemDict['A']
-        C = systemDict['C']; 
-        return (C @ expm(A*t) @ Fs).flatten()
+        C = systemDict['C'] 
+        B = systemDict['B']
+        if t == 0. :
+            return (C @ B @ fs).flatten()
+        else :
+            A = systemDict['A']
+            return (C @ expm(A*t) @ B @ fs).flatten()
+
 
     
     #==================================================================
@@ -351,9 +355,9 @@ def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
 
     if impulseArgs is None : impulseArgs = {}
     impulseArgs.update(fsDict)
-    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'a':a, 'b':b, 'tArr':tArr,\
+    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'aArr':aArr, 'bArr':bArr, 't':t,\
             'turb':(linInst.flowState=='turb'), 'eddy':eddy })
-    outDict.update(impulseArgs)
+    outDict= impulseArgs
     outDict.update({'coeffArr':coeffArr})
 
     return outDict 
