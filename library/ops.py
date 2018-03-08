@@ -128,11 +128,6 @@ class linearize(object):
         self.flowState = flowState
         self.weightDict = pseudo.weightMats(self.N)
 
-        warn("Initialized instance of 'linearize', version %s.\n" %(self.__version__)+
-                "New in this version: All system matrices are defined in makeSystem('eddy'=False,'adjoint'=False)\n"+
-                "Eddy viscosity enhancement is allowed, but baseflow is reset to turbulent according to turbMeanChannel()\n"+
-                "matNorm() defined to compute 2-norm and HS norm directly from unweighted matrices\n"+
-                "weightDict is added as a class attribute")
 
         return
         

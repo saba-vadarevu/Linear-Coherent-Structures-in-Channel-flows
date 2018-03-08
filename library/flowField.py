@@ -69,28 +69,163 @@ def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
     bArrFull = bArr.copy()
 
     if not ('fPrefix' in kwargs):
-        warn("You have to supply fPrefix, or the fields aren't going to be saved")
+        raise RuntimeError("You have to supply fPrefix, or the fields aren't going to be saved")
     else :
         fPrefix0 = kwargs.pop('fPrefix')
-        fFlag = True
 
     for aInd in range(na):
         aArr = aArrFull[ aInd*aStep : (aInd+1)*aStep ]
-        if (not (na==1)) and fFlag:
+        if (not (na==1)):
             aPrefix = '_aPart%d_%d'%(aInd+1,na)
         else : 
             aPrefix = ''
 
         for bInd in range(nb):
             bArr = bArrFull[bInd*bStep : (bInd+1)*bStep]
-            if (not (nb==1)) and fFlag:
+            if (not (nb==1)):
                 bPrefix = '_bPart%d_%d'%(bInd+1,nb)
             else :
                 bPrefix = ''
             fPrefix = fPrefix0 + aPrefix + bPrefix 
-            impulseDict = impulseResponse(aArr, bArr, N, tArr, fPrefix= fPrefix,**kwargs)
+            impulseResponse(aArr, bArr, N, tArr, fPrefix= fPrefix,**kwargs)
 
-    return impulseDict
+    return 
+
+def impulseResponse_add(aArr, bArr, N, tArr, na, nb, loadPrefix, impulseArgs=None, **kwargs):
+    """
+        Pretty much like impulseResponse_split, except it uses existing ff and adds resolution
+        Inputs:
+            aArr, bArr: Fourier modes to be included in the final flowField
+            N:  No. of wall-normal nodes
+            tArr:   Time, should be t0*[0:m] or t0*[1:m] (choose only those where added resolution is needed)
+            na: Number of parts to split aArr computation to. 
+            nb: Same as na, but not allowed for now. Check back later.
+            loadPrefix: Load existing ff files from this.
+            kwargs accepts keys
+                fsAmp : set to I_3x3 if not supplied
+                impulseArgs: Dict with keys 'y0', 'eps', 'Re', 'N'
+
+    """
+    if nb != 1 :
+        print("Not using nb. Only aArr is split into parts.")
+        nb=1
+    if impulseArgs is None :
+        raise RuntimeError("impulseArgs must be supplied")
+    assert set(('Re', 'y0', 'eps', 'N')) <= set(impulseArgs.keys())
+
+    fsAmp = kwargs.get('fsAmp', np.identity(3))
+    fsAmp = fsAmp.reshape((fsAmp.size//3, 3))
+    t0 = np.amin(tArr[np.nonzero(tArr)]) 
+    if not ('y0p' in loadPrefix):
+        y0 = impulseArgs['y0']
+        loadPrefix = loadPrefix + 'y0p%03d'%(round(-1000.*y0))
+
+    # Use Fx field at t0 to figure out original resolution. 
+    # And if any field has resolution lower than this, 
+    #   suppose that it's be truncated by energy considerations, and ignore. 
+    ff = loadff(loadPrefix+'_Fs_%d_%d_%d_t%05d.mat'%(
+                    fsAmp[0,0], fsAmp[0,1], fsAmp[0,2], round(100.*round(t0,2)) ))
+    flowDict = ff.flowDict.copy()
+    aArr0 = ff.aArr.copy(); bArr0 = ff.bArr.copy()
+    assert (aArr.size >= aArr0.size) and (bArr.size >= bArr0.size)
+    aArrExistInd = np.in1d(aArr, aArr0); bArrExistInd = np.in1d(bArr, bArr0)     
+    # Returns bool array saying if elements of aArr0 are in aArr
+    aArrExtra = aArr[np.where(~aArrExistInd)]
+    bArrExtra = bArr[np.where(~bArrExistInd)]
+    assert (aArrExtra.size+aArr0.size == aArr.size) and (bArrExtra.size+bArr0.size == bArr.size)
+        
+    # I'll do the adding in 2 phases. First, for aArr0, compute for bArrExtra in a single step
+    # That gives me flowField with aArr0 and bArr (i.e., bArr0+bArrExtra)
+    # Then, for bArr, compute for aArrExtra and bArr in 'na' steps
+    # Save the first phase ff as aPart0_na
+    # And then the second phase ffs as aPartx_na
+    # At the end, do append fields for 0 through na. 
+    # Let impulseResponse do the computation and save parts. 
+    # All I need to do is supply the right aArr, bArr, and fPrefix
+    savePrefix = kwargs.get('savePrefix', loadPrefix)
+    if not ('y0p' in savePrefix):
+        y0 = impulseArgs['y0']
+        savePrefix = savePrefix + 'y0p%03d'%(round(-1000.*y0))
+    
+    # Phase 1: aArr0, bArrExtra
+    fPrefix = savePrefix + '_aPart0_%d'%na
+    impulseResponse(aArr0, bArrExtra,ff.N, tArr, fsAmp=fsAmp, flowDict=flowDict, 
+        impulseArgs=impulseArgs, fPrefix=fPrefix)
+
+    # Phase 2: aArrExtra split into 'na' parts, bArr
+    aStep = np.int(np.ceil(aArrExtra.size/na))
+    for i0 in range(na):
+        if i0 == (na-1):
+            aArr1 = aArrExtra[ i0*aStep: ]
+        else :
+            aArr1 = aArrExtra[ i0*aStep: (i0+1)*aStep]
+        fPrefix = savePrefix +'_aPart%d_%d'%(i0+1, na)
+        impulseResponse(aArr1, bArr,ff.N, tArr, fsAmp=fsAmp, flowDict=flowDict, 
+            impulseArgs=impulseArgs, fPrefix=fPrefix)
+
+    # Now, all the files have been stored. Just gotta read them back and truncate
+    forTimeSuffix = lambda fsVec, t: '_Fs_%d_%d_%d_t%05d.mat'%(
+            fsVec[0], fsVec[1], fsVec[2], round(100.*round(t,2)) )
+    for t in tArr:
+        for i0 in range(fsAmp.shape[0]):
+            fsVec = fsAmp[i0]
+            fSuffix = forTimeSuffix(fsVec, t)
+            fName = savePrefix + fSuffix
+            try :
+                ff = loadff(fName)
+                for i1 in range(na+1):
+                    fName  = savePrefix + '_aPart%d_%d'%(i1,na) + fSuffix
+                    ff = ff.appendField(loadff(fName))
+                    ff.sortWavenumbers()
+            except :
+                print("Could not do the appending for fsVec, t:", fsVec, t)
+    return
+
+
+def checkFourierResolution(ff, xTol=1.e-5, zTol=1.e-5, 
+		    xModes=None, zModes=None, verbose=False):
+    """
+	Check if spectral flowfield is adequately resolved in Fourier modes
+	Inputs:
+	    ff: Spectral flowField 
+	    xTol: %%!tolerance in x-modes
+	    zTol: tolerance in z-modes
+	Outputs:
+	    None
+    """
+    L = ff.aArr.size//2 ; M = ff.bArr.size -1
+    if verbose:
+        print("Checking resolution adequacy for nx, nz = %d, %d"%(2*L, 2*M))
+    normArr = ff.modeWiseNorm()
+    normArrX = np.sum(normArr, axis=1)
+    normArrX[1:L] = normArrX[1:L] + normArrX[-L+1:][::-1]
+    normArrX = normArrX[:L+1]
+    normArrZ = np.sum(normArr, axis=0)
+    totalEnergy = np.sum(normArrX, axis=0)
+    if xModes is None: xModes = L//5
+    if zModes is None: zModes = M//5
+
+    errFlag = False
+    # Look at max energy in last L//5 modes, and ensure it's less than xTol of total
+    for i1 in range(3):
+        if ( np.amax(normArrX[-xModes:, i1]) >= xTol*totalEnergy[i1]):
+            if verbose:
+                print("u_%d is not adequately resolved in x"%i1)
+                print("Ratio of max energy amongst last %d modes to total is %.2e while tol is %.2e"%(
+                    xModes, np.amax(normArrX[-xModes:, i1])/totalEnergy[i1], xTol) )
+            errFlag = True
+
+        if ( np.amax(normArrZ[-zModes:, i1]) >= zTol*totalEnergy[i1]):
+            if verbose:
+                print("u_%d is not adequately resolved in z"%i1)
+                print("Ratio of max energy amongst last %d modes to total is %.2e while tol is %.2e"%(
+                    zModes, np.amax(normArrZ[-zModes:, i1])/totalEnergy[i1], zTol) )
+            errFlag = True
+    if not errFlag:
+        print("Resolution is adequate to tolerances %.3g, %.3g"%(xTol, zTol))
+    else :
+        print("Resolution is NOT adequate to tolerances %.3g, %.3g"%(xTol, zTol))
+    return (not errFlag)
 
 def evolveImpulse(aArr0, bArr0, N, t, flowDict=defaultDict, impulseArgs=None,fsAmp=None):
     """
@@ -144,7 +279,7 @@ def evolveImpulse(aArr0, bArr0, N, t, flowDict=defaultDict, impulseArgs=None,fsA
 
     
 
-def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, fPrefix=None):
+def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impulseArgs=None, fPrefix=None):
     """
     Generate flowField over set of Fourier modes as response to impulse
     Inputs:
@@ -152,87 +287,124 @@ def impulseResponse(aArr, bArr,N, tArr, flowDict=defaultDict, impulseArgs=None, 
         bArr:   Set of spanwise wavenumbers (>=0). 
                     These are extended to cover the other 3 quadrants in a-b plane
                         when printing physical fields
-        t:      Time (non-dimensionalized by U-normalization and channel half height)
+        N:      Number of Cheb collocation nodes
+        tArr:   Array of times to calculate response at
         flowDict (=defaultDict):
                 Contains keys:
                 Re (=2000):     Reynolds number
-                flowClass (='channel'):  'channel'/'couette'/'bl'
+                flowClass (='channel'):  'channel'/'couette'/'bl' ('couette', 'bl' not supported)
                 flowState (='turb')   :  'lam'/'turb'
                 eddy (=False):  True/False
         impulseArgs (=None):
                 see kwarg impulseArgs to impulseResponse.timeMap()
-
+        fsAmp (=None): Forcing components [ax, ay, az] that multiplies fs0
+                        For streamwise only, set fsAmp = np.array([1,0,0]).reshape((1,3))
+        fPrefix (=None): If not None, save file with prefix fPrefix;
+                            append forcing and time info to fPrefix
+                        If None, do not save file. Return impresArray, collection of all flowfields, instead 
+    Outputs:
+        ffDict: dict containing flowField instances for each forcing in fsAmp 
+                at t=tArr[0]. For other times, data must be saved
     """
     assert (bArr >= 0).all()
     tArr = np.array([tArr]).flatten()
-    assert (tArr > 0.).all()
-    warn("Need to write some check for wall-normal grid independence")
-
+    assert (tArr >= 0.).all()
+    #====================================================
+    # Warn if tArr isn't uniformly spaced, coz that gets too expensive
+    #====================
+    t0 = np.min(tArr[np.nonzero(tArr)])
+    tArr0 = t0 * np.arange(tArr.size)
+    if not (_areSame(tArr, tArr0) or _areSame(tArr, tArr0 + t0)):
+        warn("tArr doesn't seem to be uniformly spaced. tArr/t0 is", tArr/t0)
+    #===================================
+    # Some misc stuff
     if (fPrefix is None):
-        tArr = np.array([tArr[0]]).flatten()
-        print("No save name is specified. Can return flowFields at just the first 't', so not computing later times.")
-        print("Specify kwarg 'fPrefix' to allow computation at multiple times")
+        warn("No save name is specified. Will return the fields as a regular np.ndarray without saving to file...")
 
+    aArr = aArr.flatten(); bArr = bArr.flatten()
+
+    if (impulseArgs is None) :
+        warn("impulseArgs is not supplied. CHECK THE DEFAULTS FOR IMPULSE ARGS IN impres.timeMap().")
+    elif not (set(('y0','eps','N','Re')) <= set(impulseArgs)) :
+        warn("Not all required keys are supplied. CHECK THE DEFAULTS FOR IMPULSE ARGS IN impres.timeMap().")
+        print("Supplied keys in impulseArgs are", impulseArgs.keys())
+
+    #==============================
+    # Create linInst if not supplied
+    #=============
     Re = flowDict.get('Re',2000.)
     if flowDict.get('flowState','turb') == 'turb':
         turb = True
     else : turb = False
     eddy = flowDict.get('eddy',False)
-    #print("Computing impulse response at tArr, aArr, bArr:",tArr,aArr, bArr)
     print("Flow parameters are (Re,N,eddy,turb):",(Re,N,eddy,turb))
     linInst = ops.linearize(N=N, flowClass='channel',Re=Re,eddy=eddy,turb=turb)
 
-    # Create flowField instances for each t in tArr, one each for response to x, y, and z impulse
-    FxList = []; FyList = []; FzList = []; FxyzList = []
-    for t in tArr:
-        flowDict.update({'t':t})
-        ffx = flowField(aArr, bArr,N, flowDict=flowDict)
-        ffy = ffx.copy(); ffz = ffx.copy(); ffxyz = ffx.copy()
-        FxList.append(ffx)
-        FyList.append(ffy)
-        FzList.append(ffz)
-        FxyzList.append(ffxyz)
 
+    #=============================================================
+    # Sort out fsAmp 
+    #===============
+    if fsAmp is None : 
+        fsAmp = np.array([1.,0.,0.]).reshape((1,3))
+    else :
+        fsAmp = fsAmp.reshape((fsAmp.size//3,3))
+
+    #================================================================
+    # Start looping
+    #======================
+    # Create flowField instances for each t in tArr, one each for response to x, y, and z impulse
+    # First, create one huge array to save them all
+    impresArray = np.zeros((tArr.size, fsAmp.shape[0], aArr.size, bArr.size, 3, N),
+            dtype=np.complex)
+    # Save impulse responses into this array to start with, 
+    #   and then loop over the first two axes to store flowField instances (parts)
+    if (impulseArgs is not None) and ('y0' in impulseArgs) and ('eps' in impulseArgs):
+        print("Running impres with y0p, eps : %.4g, %.4g" %(
+                    Re*(1.+impulseArgs['y0']),impulseArgs['eps']) )
+    print("And fsAmp:", fsAmp)
+    print("For N and Re:", N, Re)
     for i0 in range(aArr.size):
         a = aArr[i0]
         print("a:",a)
         for i1 in range(bArr.size):
             b = bArr[i1]
             if (a==0.) and (b==0.): 
-                warn("Remember to verify that the (0,0) mode has zero coefficients.")
                 continue            
-            responseDict = impres.timeMap(a,b,tArr=tArr,linInst=linInst,
-                    eddy=eddy,impulseArgs=impulseArgs)
-            for tInd in range(tArr.size):
-                ff = FxList[tInd]
-                ff[i0,i1] = responseDict['coeffArr'][tInd,0].reshape((3,N))
-                ff = FyList[tInd]
-                ff[i0,i1] = responseDict['coeffArr'][tInd,1].reshape((3,N))
-                ff = FzList[tInd]
-                ff[i0,i1] = responseDict['coeffArr'][tInd,2].reshape((3,N))
-                ff = FxyzList[tInd]
-                ff[i0,i1] = responseDict['coeffArr'][tInd,3].reshape((3,N))
+            responseDict = impres.timeMap(a,b,tArr,linInst=linInst,
+                    eddy=eddy,impulseArgs=impulseArgs, fsAmp=fsAmp, coeffs=True)
+            coeffArr = responseDict['coeffArr']
+            # This is of shape (tArr.size, 3N, fsAmp.shape[0])
+
+            impresArray[:,:,i0,i1] = np.swapaxes(coeffArr, 1, 2).reshape(
+                                    (tArr.size, fsAmp.shape[0], 3, N) )
     
-    # Save each ff instance if fPrefix is supplied;
-    #   Append _Fx_txxxx.mat to the prefix
-    if fPrefix is not None :
-        fPrefix = fPrefix.split('.')[0]    # Get rid of format suffix, if supplied
-        for tInd in range(tArr.size):
-            t = tArr[tInd]
-            ff = FxList[tInd] 
-            ff.flowDict['t'] = t
-            ff.saveff(fPrefix+"_Fx_t%05d"%(round(100.*t)))
-            ff = FyList[tInd] 
-            ff.flowDict['t'] = t
-            ff.saveff(fPrefix+"_Fy_t%05d"%(round(100.*t)))
-            ff = FzList[tInd] 
-            ff.flowDict['t'] = t
-            ff.saveff(fPrefix+"_Fz_t%05d"%(round(100.*t)))
-            ff = FxyzList[tInd]
-            ff.flowDict['t'] = t
-            ff.saveff(fPrefix+"_Fxyz_t%05d"%(round(100.*t)))
-    
-    return {'FxResponse':FxList[0], 'FyResponse':FyList[0],'FzResponse':FzList[0],'FxyzResponse':FxyzList[0]}
+    # If fPrefix is not supplied, return the numpy array
+    if fPrefix is None :
+        return impresArray
+    #===============================================================================
+    # Get flowField instances out of impresArray
+    #=================
+    # Base flowDict
+    flowDict = {'Re':linInst.Re, 'flowState':linInst.flowState, 'flowClass':linInst.flowClass,\
+            'eddy':eddy, 't':tArr[0]}    # Update 't' later on
+
+    ff = flowField(aArr, bArr,N, flowDict=flowDict) 
+    # Assign parts of impresArray to this ff and then save it using ff.saveff()
+    for i0 in range(tArr.size):
+        t = tArr[i0]
+        ff.flowDict.update({'t':t})
+        for i1 in range(fsAmp.shape[0]):
+            fsVec = fsAmp[i1]
+            # Normalize amplitudes in fsAmp so that the min is +/-1
+            fsVec = fsVec/np.min(np.abs(fsVec[np.nonzero(fsVec)]))
+            fName = fPrefix + '_Fs_%d_%d_%d_t%05d.mat'%(
+                    fsVec[0], fsVec[1], fsVec[2], round(100.*t) )
+
+            ff[:] = impresArray[i0,i1]
+
+            ff.saveff(fName=fName, **impulseArgs)
+
+    return impresArray 
 
 def loadff(fName,printOut=True):
     if not fName.endswith('.mat'):
@@ -240,40 +412,38 @@ def loadff(fName,printOut=True):
         fName = fNamePrefix +'.mat'
 
     loadDict =  loadmat(fName)
+    # The mat files could have impulseArgs. To account for those, I'll split loadDict like so:
+    # First, all the arguments that should be strings
+    flowDict = {'flowClass': str(loadDict.pop('flowClass')[0]),\
+            'flowState': str(loadDict.pop('flowState')[0]), \
+            'eddy': str(loadDict.pop('eddy')[0]) }
+    # And the int
+    N =  int(loadDict.pop('N'))
+    # The remaining stuff should all be either floats or arrays
+    # The main arrays are aArr, bArr, and ffArr. Get them out first
+    aArr = loadDict.pop('aArr').flatten()
+    bArr = loadDict.pop('bArr').flatten()
+    ffArr = loadDict.pop('ffArr')
     if False :
-        # Because loadmat formats scalars as arrays, 
-        flowDict = {'N': int(loadDict['N']), 'Re': float(loadDict['Re']), 't':float(loadDict['t']),\
-                'flowClass': str(loadDict['flowClass'][0]), 'flowState': str(loadDict['flowState'][0]), 'eddy': str(loadDict['eddy'][0]) }
-
-        aArr = loadDict['aArr'].flatten(); bArr = loadDict['bArr'].flatten() 
-        N = flowDict['N']
-
-        ff = flowField(aArr, bArr, N, flowDict=flowDict)
-        ff[:] = loadDict['ffArr']
-    else :
-        # The mat files could have impulseArgs. To account for those, I'll split loadDict like so:
-        # First, all the arguments that should be strings
-        flowDict = {'flowClass': str(loadDict.pop('flowClass')[0]),\
-                'flowState': str(loadDict.pop('flowState')[0]), \
-                'eddy': str(loadDict.pop('eddy')[0]) }
-        # And the int
-        N =  int(loadDict.pop('N'))
-        # The remaining stuff should all be either floats or arrays
-        # The main arrays are aArr, bArr, and ffArr. Get them out first
-        aArr = loadDict.pop('aArr').flatten()
-        bArr = loadDict.pop('bArr').flatten()
-        ffArr = loadDict.pop('ffArr')
+        # I'm not going to be using the extra stuff. So don't bother with them
         # Everything else should be either float or arr.  
         for key in loadDict.keys():
             if isinstance(loadDict[key], np.ndarray):
                 # Save size 1 np.ndarrays as floats
-                if loadDict[key].size == 1 : flowDict[key] = float(loadDict.pop(key))
-                else : flowDict[key] = loadDict.pop(key).flatten()
+                #if loadDict[key].size == 1 : flowDict[key] = float(loadDict.pop(key))
+                #else : flowDict[key] = loadDict.pop(key).flatten()
+                if loadDict[key].size == 1 : flowDict[key] = float(loadDict[key])
+                else : flowDict[key] = loadDict[key].flatten()
                 # And others in flattened form
+    else :
+        # Except for Re and t
+        flowDict['Re'] = float(loadDict.pop('Re'))
+        flowDict['t'] = float(loadDict.pop('t'))
        
-        # Finally: 
-        ff = flowField(aArr, bArr, N, flowDict=flowDict)
-        ff[:] = loadDict['ffArr'].reshape((aArr.size, bArr.size, 3, N))
+    # Finally: 
+    ff = flowField(aArr, bArr, N, flowDict=flowDict)
+    #pdb.set_trace()
+    ff[:] = ffArr.reshape((aArr.size, bArr.size, 3, N))
 
     if printOut:
         print("Loaded flowField from ",fName)
@@ -281,24 +451,30 @@ def loadff(fName,printOut=True):
     return ff
 
 
-def loadff_split(fPrefix, t, forcing='Fz', na=32, nb=1, **kwargs):
+def loadff_split(fPrefix, t, fsAmp=None, na=32, nb=1, **kwargs):
     """
     Load flowField from a set of  .mat files 
     Current convention for naming split flowfield files is
-        fPrefix + '_aPart3_32' + '_Fz' + '_txxxxx.mat'  # when only aArr is split but not bArr
-        fPrefix + '_bPart5_16' + '_Fx' + '_txxxxx.mat'  # when only bArr is split
-        fPrefix + '_aPart3_32' + '_bPart5_16'+ '_Fy' + '_txxxxx.mat'
+        fPrefix + '_aPart3_32' + '_Fs_x_x_x' + '_txxxxx.mat'  # when only aArr is split but not bArr
+        fPrefix + '_bPart5_16' + '_Fs_x_x_x' + '_txxxxx.mat'  # when only bArr is split
+        fPrefix + '_aPart3_32' + '_bPart5_16'+ '_Fs_x_x_x' + '_txxxxx.mat'
         t is stored in 5 digits, with last 2 digits representing decimals
     Inputs:
         fPrefix: Prefix that identifies the case, such as 'ffEddyRe10000'
         t: time (float)
-        forcing (='Fz'):    Forcing direction
+        fsAmp (=None): Forcing component vector [ax, ay,az]. 
+                        Default is [1,0,0], representing Fx
         na (=32):   Number of parts for aArr
         nb (=1) :   Number of parts for bArr
     Outputs:
         flowField instance 
     """
-    fSuffix = '_%s_t%05d.mat'%(forcing, round(100*t) )
+    if fsAmp is None : fsAmp = np.array([1., 0., 0.])   # Default forcing: Fx
+    fsAmp = np.array([fsAmp]).flatten() # In case it's supplied as a list
+    fsAmp = fsAmp/np.min(np.abs(fsAmp[np.nonzero(fsAmp)]))  # Normalize fsAmp
+
+    fSuffix = '_Fs_%d_%d_%d_t%05d.mat'%(
+            fsAmp[0], fsAmp[1], fsAmp[2], round(100.*t) )
     aPrefix = ''; bPrefix = ''
     firstField = True
     for aInd in range(na):
@@ -808,9 +984,11 @@ class flowField(np.ndarray):
             When they're all done, start sorting.
 
         """
-        if np.amax(self.aArr) > -np.amin(self.aArr):
+        # if np.amax(self.aArr) > -np.amin(self.aArr):
+        if False :
             # This is probably an old case where +L*a0 was kept instead of -L*a0
             # change things up a bit
+            # CAN'T DO THIS ANYMORE, coz using this on incomplete fields (while appending) screws things up
             aMaxInd = np.argmax(self.aArr)
             aMax = self.aArr[aMaxInd]
             self.aArr[aMaxInd] = -aMax
@@ -840,11 +1018,14 @@ class flowField(np.ndarray):
         
         #pdb.set_trace()
 
-        # Now, aArr should look like aArrIdeal, and bArr as bArrIdeal
+        # Now, aArr[aInd] should look like aArrIdeal, and bArr[bInd] as bArrIdeal
+        sortedFlag = True
         if  not (np.linalg.norm(aArr[aInd] - aArrIdeal) < 1.e-09*a0) :
             print("aArr's elements aren't integral multiples of a0; aArrSorted/a0:", aArr[aInd]/a0)
+            sortedFlag = False
         if  not (np.linalg.norm(bArr[bInd] - bArrIdeal) < 1.e-09*b0) :
             print("bArr's elements aren't integral multiples of b0; bArrSorted/b0:", bArr[bInd]/b0 )
+            sortedFlag = False
 
         # Now, aArr[aInd] and bArr[bInd] should be properly sorted.
         # Get them into fft order
@@ -853,7 +1034,8 @@ class flowField(np.ndarray):
         
         self[:] = self[:,bInd]
         self[:] = self[np.fft.ifftshift(aInd)]
-        print("Successfully sorted self, aArr, and bArr into fft order")
+        if sortedFlag :
+            print("Successfully sorted self, aArr, and bArr into fft order")
 
         return
 
@@ -1012,29 +1194,29 @@ class flowField(np.ndarray):
             ffLong: appended flowField
         """
         # Ensure sorted a and b arrs so that the later stuff makes sense
-        self.aArr = np.sort(self.aArr); self.bArr = np.sort(self.bArr)
-        ff.aArr = np.sort(ff.aArr); ff.bArr = np.sort(ff.bArr)
+        #self.aArr = np.sort(self.aArr); self.bArr = np.sort(self.bArr)
+        #ff.aArr = np.sort(ff.aArr); ff.bArr = np.sort(ff.bArr)
+        #aArrInd0 = np.argsort(self.aArr); bArrInd0 = np.argsort(self.bArr)
+        #aArrInd1 = np.argsort(ff.aArr);   bArrInd1 = np.argsort(ff.bArr)
 
         assert all([self.flowDict[key] == ff.flowDict[key] for key in self.flowDict])
         assert self.N == ff.N 
 
         if (self.aArr.size == ff.aArr.size) and (self.aArr == ff.aArr).all():
             #assert not (self.bArr == ff.bArr).any()
-            
             bNew = np.concatenate(( self.bArr.flatten(), ff.bArr.flatten() )) 
-
             ffLong = flowField( self.aArr, bNew, self.N, flowDict = self.flowDict )
             ffLong[:, :self.bArr.size] = self
             ffLong[:, self.bArr.size:] = ff
+            #ffLong.sortWavenumbers() 
         
         elif (self.bArr.size == ff.bArr.size) and (self.bArr == ff.bArr).all():
             #assert not (self.aArr == ff.aArr).any()
-            
             aNew = np.concatenate(( self.aArr.flatten(), ff.aArr.flatten() )) 
-
             ffLong = flowField( aNew, self.bArr, self.N, flowDict = self.flowDict )
             ffLong[:self.aArr.size] = self
             ffLong[self.aArr.size:] = ff
+            #ffLong.sortWavenumbers()
         else :
             self.messyAppendField(ff)
         return ffLong
