@@ -15,6 +15,7 @@ import sys
 class Transcript(object):
 
     def __init__(self, filename):
+        sys.stdout.write("Ensuring sys.stdout if fine before assignment\n")
         self.terminal = sys.stdout
         self.logfile = open(filename, "a", 1)
 

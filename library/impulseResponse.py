@@ -14,20 +14,109 @@ from scipy.sparse.linalg import expm_multiply
 import pdb
 from miscUtil import _arrGCD, _floatGCD, _areSame, _nearestEntry, _nearestInd
 
+def _adjustEps(Re=None, epsNom=None, y0=None, y0plus=None, N=None,epsArr=None, relTol=0.05):
+    """
+        Modify eps so that the impulse fs0 is consistent with Cheb collocation
+        Consistency with Chebyshev collocation is asserted by ensuring that the 
+            error between the (first and second) analytical derivative is within
+            5% of the derivative computed as D1 @ fs0 and D2 @ fs0
+        Inputs:
+            Re (=None): Reynolds number; force kwarg
+            y0 (=None): Location of impulse
+            y0plus(=None):  Location in plus units, from bottom wall. Has priority to y0
+                            Either y0 or y0plus must be supplied
+            N (=None):  Number of Cheb nodes; force kwarg
+            epsNom (=None): If not None, return epsNom if error within 5%
+                                If error isn't within 5%, return nearest value in epsArr with error below 5%
+            epsArr (=None): Array for eps search
+        Outputs:
+            epsOpt  : Optimal eps for the given y0, Re, N
+    """
+    assert not (  (y0 is None) and (y0plus is None ) )
+    if y0plus is not None : y0 = -1. + Re*y0plus
+
+    if epsArr is None : 
+        if epsNom is None :
+            epsArr = 2.**np.arange(2., 6.,0.1)
+        else :
+            epsArr = epsNom * (2.** np.arange(-2.1, 2.2, 0.1))
+    else : epsArr = epsArr.flatten()
+
+    
+    impulseArgs = {'Re':Re, 'turb': True , 'y0':y0, 'N':N, "Nflag": False }
+    y, DM = pseudo.chebdif(N,2)
+    D1 = np.ascontiguousarray(DM[:,:,0])
+    D2 = np.ascontiguousarray(DM[:,:,1])
+    def __checkImpFun(eps):
+        fs0 = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(- (Re*(y-y0))**2 / 4./eps )
+        fs0_y = (-2.*(Re**2) * (y-y0))/(4.*eps) * fs0
+        fs0_yy= ((-2.*(Re**2) * (y-y0))/(4.*eps))**2 * fs0 \
+                    -(2.*(Re**2))/(4.*eps) * fs0
+
+        d1err = np.linalg.norm( fs0_y - D1 @ fs0 )/np.linalg.norm(fs0_y)
+        d2err = np.linalg.norm( fs0_yy - D2 @ fs0 )/np.linalg.norm(fs0_yy)
+        return d1err, d2err
+
+    def __errFun(eps):
+        d1err , d2err = __checkImpFun(eps)
+        #return np.sqrt(d1err * d2err)
+        return max( d1err, d2err)
+
+    if epsNom is not None :
+        errNom = __errFun(epsNom)
+        if errNom <= relTol:
+            # If error for epsNom is acceptable, return this fs0
+            epsOpt = epsNom
+            fs0 = 1./(2.*np.sqrt(np.pi * epsOpt )) * np.exp(- (Re*(y-y0))**2 / 4./epsOpt )
+            impulseArgs.update({"epsOpt":epsOpt, "eps":epsOpt, "errMin":errNom, "fs0":fs0, "DM":DM})
+            return impulseArgs
+            
+
+    errArr = np.zeros(epsArr.size)
+    for i1 in range(epsArr.size):
+        eps = epsArr[i1]
+        errArr[i1] = __errFun(eps)
+
+    i1min = np.where(errArr <= relTol)[0]   # Get index for err < 5%
+    #pdb.set_trace()
+    if i1min.size != 0 : 
+        # If multiple eps have err < 5%, pick the one closest to epsNom; 
+        # Unless epsNom isn't supplied, in which case, use the smallest eps with err<5%
+        if epsNom is not None :
+            i1min = i1min[_nearestInd(epsArr[i1min], epsNom)]
+        else :
+            i1min = i1min[0]
+    else : 
+        i1min = np.argmin(errArr)   # If none have err < 5%, pick the smallest error
+    #pdb.set_trace()
+
+    epsOpt = epsArr[i1min]
+    errMin = errArr[i1min]
+    fs0 = 1./(2.*np.sqrt(np.pi * epsOpt )) * np.exp(- (Re*(y-y0))**2 / 4./epsOpt )
+
+    impulseArgs.update({"eps":epsOpt, "errMin":errMin, "fs0":fs0, "DM":DM})
+    if (epsNom is not None) and ( not ( 0.5 <= epsOpt/epsNom <= 1.5 ) ) :
+        impulseArgs['Nflag'] = True 
+    return impulseArgs 
+
+
+
 def _fs0(**kwargs):
     if kwargs.get('turb', True):
         # Turbulent case
         if 'Re' not in kwargs: Re = 2000.; warn("Re not supplied. Using 2000...")
         else : Re = kwargs['Re']
+        if 'N' not in kwargs: N = 251; warn("N not supplied. Using 251...")
+        else : N = kwargs['N']
+        
         if 'y0' not in kwargs: 
             y0plus =200.;
             y0 = -1. + y0plus/Re
             warn("y0 not supplied. Using %.3g so that y0^+=200..."%y0)
         else : y0 = kwargs['y0']
+
         if 'eps' not in kwargs: eps = 50.; warn("eps not supplied. Using 50...")
         else : eps = kwargs['eps']
-        if 'N' not in kwargs: N = 251; warn("N not supplied. Using 251...")
-        else : N = kwargs['N']
 
         y, DM = pseudo.chebdif(N,2)
         fs0 = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(- (Re*(y-y0))**2 / 4./eps )
@@ -104,13 +193,19 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     #       at least e^{A.n.dt} = (e^{A.dt})^n can be used
     # If neither is true, just do e^{A.t} = expm(A*t)
     tArr = np.array([tArr]).flatten()
-    t0 =np.min(tArr) ;
+    tArr.sort()
+    t0 =np.min(tArr[np.nonzero(tArr)]) 
     assert (tArr >= 0.).all()
-    if _areSame(tArr, t0*np.arange(tArr.size) ): 
-        uniformTime = True; linearTime = True
+    if _areSame(tArr, t0*np.arange(1,tArr.size+1) ): 
+        # If tArr goes t0*{1,2,3,...}
+        uniformTime = True; linearTime = True; zeroTime = False
+        tGCD = t0
+    elif _areSame(tArr, t0*np.arange(0,tArr.size) ): 
+        # If tArr goes t0*{0,1,2,...}
+        uniformTime = True; linearTime = True; zeroTime = True  
         tGCD = t0
     else :
-        tGCD = _arrGCD(tArr)
+        tGCD = _arrGCD(tArr[np.nonzero(tArr)])
         # If I have to raise e^{A.dt} to very large powers, it's not worth it
         if tGCD//t0 <= 5:
             uniformTime = False ; linearTime = True 
@@ -136,6 +231,7 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     else :
         useBasis = False
         fsAmp0 = fsAmp
+    
 
 
     #====================================================================
@@ -144,7 +240,7 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     if linInst is None :
         # Ensure modeDict has entries for N and Re. turb defaults to False 
         assert set(( 'N','Re' )) <= set(modeDict)
-        modeDict['turb'] = modeDict.get('turb', False)
+        modeDict['turb'] =modeDict.get('turb', False )
         linInst = ops.linearize(flowClass='channel', **modeDict)
     N = linInst.N
     
@@ -165,15 +261,22 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     # Forcing vectors 
     #==============
     # Function to build Fs for each fsAmp[k]
+    # See if flow is turbulent
+    turb = (linInst.flowState == 'turb')
     if impulseArgs is None :
-        impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
+        impulseArgs = {'eddy':eddy, 'turb':turb}
     else :
-        impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
+        impulseArgs.update({'eddy':eddy, 'turb':turb })
+
+
+    if 'fsAmp' in impulseArgs.keys(): impulseArgs.pop('fsAmp')
+    #pdb.set_trace()
     fsDict = _fs(fsAmp=fsAmp0, **impulseArgs)
     fs = fsDict['fs']; 
     fs = fs.T   # _fs returns fs so that fs[k] refers to a particular forcing, i.e. shape mx 3N
     # We want fs to a matrix of shape 3Nxm, so that B@fs is shape 2Nxm, and final u(t) is shape 3Nxm
     Fs = B @ fs
+
 
     if useBasis: 
         # To ensure I don't mess up the weighting factors, 
@@ -217,12 +320,15 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     if linearTime:
         expFactor0  = expm(A*t0)
     for i0 in range(tArr.size):
-        if uniformTime:
-            expFactor = expFactor @ expFactor0 
-        elif linearTime:
-            expFactor = matrix_power(expFactor0, int(round(tArr[i0]/tGCD)) )
+        if tArr[i0] == 0.: 
+            expFactor = np.identity(2*N, dtype=np.complex)
         else :
-            expFactor = expm(A * tArr[i0])
+            if uniformTime:
+                expFactor = expFactor @ expFactor0 
+            elif linearTime:
+                expFactor = matrix_power(expFactor0, int(round(tArr[i0]/tGCD)) )
+            else :
+                expFactor = expm(A * tArr[i0])
 
         tmpArr = C @ expFactor @ Fs     # This is a matrix of shape 3N x m 
         # Each column of tmpArr corresponds to field due to a forcing, fsAmp0[m]
