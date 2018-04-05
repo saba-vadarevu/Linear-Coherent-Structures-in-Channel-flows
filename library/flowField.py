@@ -72,8 +72,10 @@ def impulseResponse_split(aArr, bArr, N,tArr, na,nb,**kwargs):
         raise RuntimeError("You have to supply fPrefix, or the fields aren't going to be saved")
     else :
         fPrefix0 = kwargs.pop('fPrefix')
-
-    for aInd in range(na):
+    
+    # In case some aParts have already been run,
+    aInd0 = kwargs.pop('ignoreAParts', 0)
+    for aInd in range(aInd0,na):
         aArr = aArrFull[ aInd*aStep : (aInd+1)*aStep ]
         if (not (na==1)):
             aPrefix = '_aPart%d_%d'%(aInd+1,na)
