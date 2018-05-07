@@ -1,37 +1,27 @@
-""" flowField.py Defines a class (inheriting numpy.ndarray) for plane channel and Couette flows
+""" flowField.py 
+
+Defines a class 'flowField' (inheriting numpy.ndarray) for plane channel and Couette flows
     Discretization is Fourier, Fourier, Chebyshev (collocation), Fourier in x,y,z
     z is spanwise
-Class instances have shape (nx, nz, N) for x,z, and y
-    For Fourier discretization, a rectangular domain is used and positive and negative 
-        mode coefficients are stored, as ,0,1,...L,-L+1,..,-1 for time with nx=2L, 
-        similarly for z
-Class attributes are:
-    flowDict, N,  y, D, D2, aArr, bArr, U, dU, d2U
-        aArr and bArr need not have integral multiples, any set is fine
-        ensure aArr >= 0 and bArr >= 0 (do I keep b=0?)
-    flowDict has keys:
-        Re :Reynolds number based on normalization of U
-        flowClass: 'channel', 'couette', or 'bl'
-        flowState: 'lam' or 'turb'
-        eddy: True/False
+    Any operation that works for np.ndarray can be performed, but outputs will not be flowField instances
+    Use class methods as much as possible.
 
-Class methods are:
-    ddx, ddy, ddz, ddx2, ddy2, ddz2 :  Derivatives in x, y, z; z is spanwise
-    div:    Divergence
-    velGrad:    Gradient (tensor) of velocity vector
-    invariants: P,Q,R of velocity gradient
-    swirlStrength: Field of imaginary components of complex eigvals
-                    of velocitygradient at each point
-    toPhysical: Print (or save to file) physical field
-
-Module functions outside the class:
-impulseResponse:    Impulse response for specified modes stored in flowField
+Module functions outside the flowField class:
+    getDefaultDict()
+    impulseResponse:    Impulse response for specified modes, stored as flowField instance
+    impulseResponse_split(): Impulse response run and stored in parts
+    impulseResponse_add(): Improve earlier computations of impulse response by adding resolution (Fourier modes)
+                            Needs testing
+    checkFourierResolution: Check adequacy of resolution by comparing energy in the highest wavenumbers
+    loadff: Load flowField instance from .mat file
+    loadff_split(): Load flowField that was stored as parts (see impulseResponse_split())
 """
 
 """ #####################################################
 Sabarish Vadarevu
 Melbourne School of Engineering
 University of Melbourne, Australia 
+May 2018
 """
 
 import numpy as np
@@ -108,6 +98,7 @@ def impulseResponse_add(aArr, bArr, N, tArr, na, nb, loadPrefix, impulseArgs=Non
                 impulseArgs: Dict with keys 'y0', 'eps', 'Re', 'N'
 
     """
+    warn("impulseResponse_add() needs more testing. DO NOT TRUST RESULTS.")
     if nb != 1 :
         print("Not using nb. Only aArr is split into parts.")
         nb=1
@@ -229,57 +220,6 @@ def checkFourierResolution(ff, xTol=1.e-5, zTol=1.e-5,
         print("Resolution is NOT adequate to tolerances %.3g, %.3g"%(xTol, zTol))
     return (not errFlag)
 
-def evolveImpulse(aArr0, bArr0, N, t, flowDict=defaultDict, impulseArgs=None,fsAmp=None):
-    """
-    Generate flowField for just one time and one forcing
-        For multiple times and forcings, use impulseResponse()
-    Inputs:
-        aArr0:   Set of streamwise wavenumbers (>=0)
-        bArr0:   Set of spanwise wavenumbers (>=0). 
-                    These are extended to cover the other 3 quadrants in a-b plane
-                        when printing physical fields
-        N:      Number of wall-normal nodes
-        t:      Time (non-dimensionalized by U-normalization and channel half height)
-        flowDict (=defaultDict):
-                Contains keys:
-                Re (=2000):     Reynolds number
-                flowClass (='channel'):  'channel'/'couette'/'bl'
-                flowState (='turb')   :  'lam'/'turb'
-                eddy (=False):  True/False
-        impulseArgs (=None):
-                see kwarg impulseArgs to impulseResponse.timeMap()
-        fsAmp:  Magnitudes ax,ay,az in forcing [ax*fs0; ay*fs0; az*fs0] 
-                    This vector is then normalized
-                    Convention is to have smallest non-zero number of ax,ay,az to be +/-1
-    Outputs:
-        ff: flowField instance
-        outDict with keys relating to impulseArgs, to keep track of what was done  
-    """
-    aArr0 = aArr0.flatten() ; bArr0 = bArr0.flatten()
-    a0 = np.min(np.abs(aArr0[np.nonzero(aArr0)])) 
-    b0 = np.min(np.abs(bArr0[np.nonzero(bArr0)])) 
-    aArr = a0 * (- (aArr0.size//2) + np.arange( aArr0.size) )
-    bArr = b0 * np.arange(bArr0.size)
-    if not _areSame(aArr0,aArr):
-        print("The aArr that was supplied isn't of good form, rebuilding it...")
-    if not _areSame(bArr0,bArr):
-        print("The bArr that was supplied isn't of good form, rebuilding it...")
-
-    linInst = ops.linearize(N=N, flowClass='channel',
-            Re=flowDict['Re'],turb=(flowDict['flowState']=='turb') )
-
-    
-    outDict = impres.evolveField(aArr, bArr, t, linInst=linInst,eddy=flowDict['eddy'],
-            fsAmp=fsAmp, impulseArgs=impulseArgs)
-    flowDict.update({'t':t})
-    ff = flowField(aArr, bArr,N, flowDict=flowDict)
-    ff.flowDict['t'] = t
-
-    ff[:] = outDict.pop('coeffArr').reshape(ff.shape)
-
-    return ff, outDict
-
-    
 
 def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impulseArgs=None, fPrefix=None):
     """
@@ -409,6 +349,16 @@ def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impuls
     return impresArray 
 
 def loadff(fName,printOut=True):
+    """ Load flowField instance from .mat file
+        Inputs:
+        (Compulsory)
+            fName: .mat file name (.mat appended if not in file name)
+        (optional)
+            printOut (=True): Report load success if True
+        
+        Outputs:
+            flowField instance
+    """
     if not fName.endswith('.mat'):
         fNamePrefix = fName.split('.')[0]
         fName = fNamePrefix +'.mat'
@@ -497,60 +447,6 @@ def loadff_split(fPrefix, t, fsAmp=None, na=32, nb=1, **kwargs):
     ff.sortWavenumbers()
     return ff
     
-def add2physical(u=None, vorz=None, swirl=None, ffList=None, fNameList=None, ySpace='cheb',**kwargs):
-    """ 
-    Add u, omega_z, and swirling strength due to modes in a supplied flowField 
-    Inputs:
-        v(=None):  3D array to add 'u' to
-        vorz(=None): 3D array to add omega_z to
-        swirl(=None):3D array to add swirling strength to
-        ff (=None): flowField instance to generate the above fields
-        fName (=None):  If ff is not supplied, load ff from file fName
-        ySpace (='linear'): If 'linear', use linear grid in y, if 'cheb', use Chebyshev
-        **kwargs:   physical grid paramters: x0, x1, z0, z1 
-                xArr is generated as np.linspace(x0,x1,nx), similarly zArr
-    """
-    assert u.shape == vorz.shape == swirl.shape
-
-    if np.linalg.norm(swirl, ord='fro') >= 1.0e-9:
-        warn("swirling strength isn't supposed to be superposed\n"+
-                "Or maybe it can be, but I don't have proof of that yet.\n"+
-                "Anyway, until I don't prove it, don't use superpositon.")
-
-    Lx = 2.*np.pi/ff.aArr[0]; Lz = 2.*np.pi/ff.bArr[0]
-    if not set(('x0','x1')) <= set(kwargs):
-        x0 = -0.1*Lx; x1 = 0.9*Lx; 
-        xShift = kwargs.get('xShift',2./3.* np.amax(ff.U)*ff.flowDict['t'])
-    else :
-        x0 = kwargs['x0']; x1 = kwargs['x1']
-        xShift = kwargs.get('xShift',0.)
-    if not set(('z0','z1')) <= set(kwargs):
-        z0 = -0.5*Lz; z1 = 0.5*Lz; 
-    else :
-        z0 = kwargs['z0']; z1 = kwargs['z1']
-    xArr =  xShift + np.linspace(x0, x1, u.shape[0])
-    zArr =  zShift + np.linspace(z0, z1, u.shape[0])
-
-    # I could call flowField.swirl(), which returns swirl, u, vorz.
-    #   u and vorz can be added from different sets of modes,
-    #   but I can't do that for swirl, so
-    velGrad = np.zeros(( xArr.size, zArr.size, yArr.size, 3, 3 ))
-    warn("THIS ROUTINE IS INCOMPLETE. DO NOT USE IT.")
-    if fNameList is not None :
-        for fName in fNameList:
-            ff = loadff(fName)
-            u[:] += ff.toPhysical(arr=ff[:,:,0], xArr=xArr, zArr=zArr, N=u.shape[-1], 
-                    fName=None, symm='even', ySpace=kwargs['ySpace'])
-            ffx = self.ddx() 
-            vorz[:] += toPhysical(arr=ff[:,:,0], xArr=xArr, zArr=zArr, N=u.shape[-1], 
-                    fName=None, symm='even', ySpace=kwargs['ySpace'])
-
-            print("Successfully added u, vorz, and velGrad from ", fName)
-
-    return
-
-
-
 
 
 class flowField(np.ndarray):
@@ -558,36 +454,58 @@ class flowField(np.ndarray):
     Defines a class (inheriting numpy.ndarray) for plane channel and Couette flows
         Discretization is Fourier, Fourier, Chebyshev (collocation), Fourier in x,y,z
         z is spanwise
-    Class instances have shape (nx, nz, N) for x,z, and y
-        For Fourier discretization, a rectangular domain is used and positive and negative 
-            mode coefficients are stored, as ,0,1,...L,-L+1,..,-1 for time with nx=2L, 
-            similarly for z
-    Class attributes are:
-        flowDict, N,  y, D, D1, D2, aArr, bArr, U, dU, d2U, weightDict
-            aArr and bArr need not have integral multiples, any set is fine
-            ensure aArr >= 0 and bArr >= 0 (do I keep b=0?)
-        flowDict has keys:
-            Re :Reynolds number based on normalization of U
-            flowClass: 'channel', 'couette', or 'bl'
-            flowState: 'lam' or 'turb'
-            eddy: True/False
-            t:      Time at which flowField is supposedly a response to impulse
-    
-    Methods: 
-        verify 
-        ddx, ddx2, ddz, ddz2, ddy, ddy2 
-        div, curl, toPhysical, swirl
-        dot, norm, weighted
-        flux, dissipation, energy, powerInput
+    "self" refers to an instance of the class
 
+    Class instances can have shape (l1, m1, 3, N) 
+        where l1 = aArr.size, m1 = bArr.size, N is number of Cheb nodes 
+            Cheb nodes should be internal only, but it is possible to rewrite the class to allow walls.
+            See kwargs in the functions in pseudo.py
+        aArr and bArr can have arbitrary wavenumbers, but it's advised to have 
+            aArr = a0*{0,1,..,L-1,-L,-L+1,..,-1}, bArr = b0*{0,1,...,M}
+            so fft-like methods work
+        Class attributes are:
+            aArr, bArr, N, y, flowDict, D1, D2, D, weightDict, U, dU, d2U
+                aArr, bArr, and N are as above
+                y is array of Chebyshev nodes
+                flowDict is a dict containing keys
+                    Re :Reynolds number based on normalization of U (U_CL for laminar, U_tau for turbulent, usually)
+                    flowClass: 'channel', 'couette', or 'bl'; 'bl' is not fully supported
+                    flowState: 'lam' or 'turb' (used to initialize U profile if not supplied)
+                    eddy: True/False    
+                    t: float, time normalized by U and h used for normalizing LNSE
+                D1, D: Differentiation operator for first wall-normal derivative
+                D2 : Second derivative
+                weightDict: Matrices that help with Clenshaw-Curtis quadrature. Dict with keys
+                    w:  arr of shape (N,) for quadrature
+                    W1:  diagonal matrix of shape (N,N) for quadrature
+                    W2, W3: As W1, but for 2-c and 3-c vectors instead of scalars
+                    W1Sqrt, W2Sqrt, W3Sqrt: Square roots
+                    W1SqrtInv, W2SqrtInv, W3SqrtInv: Inverse of square-roots
+                    These are useful to define weighted matrices in SVD
+                U, dU, d2U: Mean velocity and its derivatives
 
-    self.verify() ensures that the shape attributes are self-consistent. 
+    Class methods are:
+        saveff: Save to .mat file , 
+        verify: simple checks on flowDict and self.shape
+        copyArray: copy to a np.ndarray without the flowField machinery
+        ddx, ddy, ddz, ddx2, ddy2, ddz2 :  Derivatives in x, y, z; z is spanwise
+        laplacian, curl  
+            divergence is easy to compute: self.ddx()[:,:,0]+self.ddy()[:,:,1]+self.ddz()[:,:,2]; excluded since it's a scalar and not 3-c vector)
+        swirl: Field of imaginary components of complex eigvals; see Zhou et. al. (1999) JFM, Mechanisms of...
+        dot, norm: integrate over x,y,z and divide by box volume
+        toPhysical: physical field from the spectral field in self
+        savePhysical: Higher level than toPhysical; save a common set of fields to .mat file 
+        appendField: Append coefficients from two sets of wavenumbers to produce a larger field for the union of the wavenumbers. Restrictions apply
+        sortWavenumbers: To be used with appendField to get modes into fft-order
+        zero, identity: self.identity() =self, self.zero() has shape and attributes of self, but zero elements.
+        slice: Interpolate/extrapolate 
+        modeWiseNorm: Integral along wall-normal for each Fourier mdoe
 
     Initialization:
-        flowField() creates an instance using a default dictionary: a 3 component zero-vector of shape (64,128,3,251) for turbulent channel flow at Re=2000 
+        flowField() creates an instance using a default dictionary: 
+            a 3 component zero-vector of shape (64,128,3,251) for turbulent channel flow at Re=2000 (see top of module for defaultDict)
         flowField(aArr, bArr,N,flowDict=dictName) creates an instance with shape (aArr.size, bArr.size,3,N), with flowDict to specify the flow conditions.
     A warning message is printed when the default dictionary is used.
-            
     """
     def __new__(cls, *args, flowDict=None,**kwargs):
         """Creates a new instance of flowField class, call as
@@ -615,12 +533,14 @@ class flowField(np.ndarray):
         obj = np.ndarray.__new__(cls,
                 shape=arrShape, dtype=np.complex, buffer=np.zeros(arrShape, dtype=np.complex) )
                 
-        
+        # Attributes:
+        # flowDict, aArr, bArr, N, y, D1, D2, D, weightDict, U, dU, d2U
         obj.flowDict = flowDict.copy()
         obj.aArr = aArr
         obj.bArr = bArr
         obj.N = N
         
+        warn("Using channel geometry, excluding walls; see kwargs of pseudo.chebdif() and pseudo.weightMats() for differentiation/integration matrices that could include walls.")
         y,DM = pseudo.chebdif(N,2)
         D1 = np.ascontiguousarray(DM[:,:,0]) 
         D2 = np.ascontiguousarray(DM[:,:,1])
@@ -628,7 +548,7 @@ class flowField(np.ndarray):
        
         obj.weightDict = pseudo.weightMats(N)
 
-        assert flowDict['flowClass'] not in ['couette','bl'], "Currently only channel is supported"
+        assert flowDict['flowClass'] not in ['couette','bl'], "Currently only channel is supported, Couette/BL are easily implemented with a few fixes"
         if flowDict['flowState'] == 'lam':
             U = 1. - y**2; dU = -2.*y; d2U = -2.*np.ones(N)
         else :
@@ -641,6 +561,7 @@ class flowField(np.ndarray):
         
     
     def __array_finalize__(self,obj):
+        """ For copying/slicing flowField instances"""
         if obj is None : return
          
         self.flowDict = getattr(self,'flowDict',obj.flowDict.copy())
@@ -661,12 +582,12 @@ class flowField(np.ndarray):
         """ Save flowField instance to .mat file
         Inputs:
             Compulsory args:
-                fName:  File name
+                fName:  File name (.mat appended if format unspecified)
             kwargs:
                 Anything is accepted. kwargs will be directly saved to the .mat file
-                Particularly useful to pass impulseArgs
+                Particularly useful to pass impulseArgs, the parameters used to define the impulse that produced this field
         Outputs:
-            null """
+            None """
         if not fName.endswith('.mat'):
             fNamePrefix = fName.split('.')[0]
             fName = fNamePrefix +'.mat'
@@ -758,7 +679,7 @@ class flowField(np.ndarray):
 
     def dot(self, vec2):
         """Computes inner product for two flowField objects, scalar or vector,
-            by integrating {self[nd=j]*vec2[nd=j].conj()} along x_j, and adding the integrals for j=1,..,self.nd.
+            by integrating {self[kx,kz,kc]*vec2[].conj()} for each x_j, and adding the integrals for j=1,..,self.nd.
         Currently, only inner products of objects with identical dictionaries are supported"""
         assert (self.shape == vec2.shape), 'Method for inner products is currently unable to handle instances with different flowDicts'
         weightArr = self.weightDict['w'].reshape((1,1,1,self.N))
@@ -775,14 +696,11 @@ class flowField(np.ndarray):
 
 
 
-
-
-
     def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False, **kwargs):
         """
         Get physical fields from spectral
         Inputs:
-            arr:    Any array of spectral coefficients for a scalar of shape consistent with self
+            arr:    Any 3-d or 4-d array of spectral coefficients for a scalar of shape consistent with self
             keyword arguments:
             x0, lx, z0; all None by default
                 If they're not specified, use domain x in [0,Lx], z in [-Lz/2,Lz/2]
@@ -1054,7 +972,7 @@ class flowField(np.ndarray):
                 swirl, xArr, yArr, zArr
         """
         if doSort: self.sortWavenumbers()
-        else : warn("Are you sure wavenumbers are in fft order?")
+        else : warn("We're now assuming wavenumbers are in fft order...")
         
         tmpArr = self.ddx()
         ux = tmpArr[:,:,0]
@@ -1090,7 +1008,7 @@ class flowField(np.ndarray):
         uz = None; vz = None; wz = None
         tmpArr = None
         
-        swirlStrength = velGrad2swirl(velGrad)
+        swirlStrength = _velGrad2swirl(velGrad)
         
         return {'swirl':swirlStrength, 'xArr':xArr, 'yArr':yArr, 'zArr':zArr} 
 
@@ -1179,6 +1097,7 @@ class flowField(np.ndarray):
 
 
     def identity(self):
+        """ Returns itself (no copies are made)"""
         return self
 
     def appendField(self, ff):
@@ -1220,7 +1139,7 @@ class flowField(np.ndarray):
             ffLong[self.aArr.size:] = ff
             #ffLong.sortWavenumbers()
         else :
-            self.messyAppendField(ff)
+            raise RuntimeError("flowfields must have matching aArr xor bArr")
         return ffLong
     
     def slice(self, L=None, M=None, N=None):
@@ -1271,17 +1190,6 @@ class flowField(np.ndarray):
 
         return ffNew
 
-    def messyAppendField(self,ff):
-        """ Combine flowFields, like appendField(), but without the restriction
-        When (a,b) in the new ff instance is not in either self or ff, leave zeros
-
-        Inputs:
-            ff: flowField to be appended
-        Outputs:
-            ffLong:     Appended field"""
-        raise RuntimeError("This isn't ready yet... Ensure appendField can be used..")
-        return
-
     def modeWiseNorm(self):
         """ 
         Return energy in each Fourier mode for each component of velocity
@@ -1298,10 +1206,14 @@ class flowField(np.ndarray):
 
 def _spec2physIfft(arr0, L=None, M=None):
     """
+       Inputs:
+        (Compulsory)
+            arr0: Array of shape (2*L, M+1, N) of spectral coefficients
             L (=None):      If supplied, and different from self.aArr//2, slice flowField
                                 Used for padding, since numpy's padding seems a bit funny
             M (=None):      Same as above, but for spanwise modes
     """
+    assert arr0.ndim == 3
     L0 = arr0.shape[0]//2; M0 = arr0.shape[1]-1; N= arr0.shape[2]
     warn("Assuming that modes go positive and negative in kx")
     if (L is not None) or (M is not None): 
@@ -1325,7 +1237,7 @@ def _spec2physIfft(arr0, L=None, M=None):
     physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
     return physField
 
-def velGrad2swirl(velGrad):
+def _velGrad2swirl(velGrad):
     """ Get swirl field from a (physical) velocity gradient tensor field
     Inputs:
         velGrad: velocity gradient tensor field of shape (nx, nz, ny, 3, 3)

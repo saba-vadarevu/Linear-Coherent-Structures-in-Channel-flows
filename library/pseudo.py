@@ -4,9 +4,11 @@
 #
 # IMPORTANT: In this version, all functions take as argument the number of internal nodes, denoted Nint
 #           clencurt() modified to include a factor of 0.5, to normalize the integral which is from -1 to 1
-# Contains functions:
+# Contains (channel geometry) functions:
 #   y,DM    = chebdif(Nint,M),     Differentiation matrices (Chebyshev collocation)
+#   D4      = cheb4c(Nint),        Fourth differentiation matrix assuming clamped BCs (Chebyshev collocation)
 #   w       = clencurt(Nint),      Clenshaw-Curtis weights
+#   dotProd = chebdot(vec1,vec2, Nint),  dot product using Clenshaw-Curtis weights
 #   norm2   = chebnorm(vec,Nint),  2-norm using Clenshaw-Curtis weights
 #   norm2   = chebnorm2(vec,Nint), 2-norm using Clenshaw-Curtis weights
 #   norm1   = chebnorm1(vec,Nint), 1-norm using Clenshaw-Curtis weights
@@ -14,6 +16,9 @@
 #   coll    = chebcoll_vec(a),  Collocation values from Chebyshev coefficients
 #   interp  = chebint(fk,x),    Interpolation from Chebyshev grid to a general grid
 #   integral= chebintegrate(f), Integrate function values with BC f(y=-1) = 0
+#   weightDict=weightMats(N),   clencurt weights arranged as different diagonal
+# Similar functions for boundary layers (semi-infinite domain) using exponential mapping of nodes:
+#   chebdifBL, cheb4cBL, clencurtBL, chebdotBL, chebnormBL, chebnorm1BL, chebnorm2BL, chebnormlBL
 """
 ## ----------------------------------------------------
 ## ACKNOWLEDGEMENT
@@ -38,6 +43,7 @@
 # Mechanical engineering  
 # University of Melbourne, Australia
 # Email: Sabarish.Vadarevu@unimelb.edu.au 
+# May, 2018
 ###--------------------------------------------------------
 
 import numpy as np
@@ -328,39 +334,6 @@ def chebint(fk, x, walls=False):
     D = 1/(D+speps*(D==0))
     p = np.dot(D,(w*fk))/(np.dot(D,w))
     return p
-
-def chebFilter(arr, Ndrop=1, symms=None, **kwargs):
-    """ Filter array of data on chebyshev grid by dropping the last 'Ndrop' cheb polynomials
-    Input:
-        arr: Collocated data on Cheb nodes
-        Ndrop (=1): Number of coefficients to drop
-        kwargs:
-            N: Number of Cheb nodes. 
-                If supplied, reshape array as (arr.size//N, N),
-                If not supplied, use arr.shape[-1]
-    Output:
-        filteredArr: Collocated data, filtered 
-        Same shape as arr
-    """
-    N = kwargs.get('N', arr.shape[-1])
-    assert Ndrop <= N
-    if (Ndrop > 10) or (Ndrop > N/3):
-        warn("Are you dropping too many modes? Ndrop is %d, N is %d"%(Ndrop,N))
-    
-    arrTmp = arr.reshape((arr.size//N, N))
-    filteredArr = arrTmp.copy()
-    coeffArr = chebcoeffs(arr.reshape((arr.size//N, N)))
-    if Ndrop != 0:
-        coeffArr[:,-Ndrop:] = 0.
-    
-    # For odd or even symmetries, I can further filter the wall-normal profile
-    if symms == 'even': coeffArr[:, 1::2] = 0.
-    elif symms == 'odd': coeffArr[:,::2] = 0.
-
-    filteredArr = chebcoll_vec(coeffArr)
-
-    return filteredArr.reshape(arr.shape)
-
 
 
 

@@ -1,3 +1,18 @@
+""" 
+ops.py
+Two classes are defined: linearize and statComp
+linearize is simpler and is used for impulseResponse
+statComp is for reproducing the work of Zare et. al., Colour of turbulence (2017)
+Both define linear operators, such as OSS, resolvent, resolvent with eddy, etc... 
+Problem definition must be supplied with keyword arguments
+
+Additionally, the following function is defined
+turbMeanChannel: Returns dict with mean velocity and eddy viscosity using the Cess semi-analytical profile. 
+
+IMPORTANT: Everything here is written only for internal nodes. 
+            Variables at the wall are always ignored; can be made to include walls with a bit of work
+            y,v represent wall-normal
+"""
 import numpy as np
 import scipy as sp
 from scipy.io import savemat
@@ -12,22 +27,12 @@ import minimize
 import os
 import h5py
 from scipy.integrate import quad
-assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code."
+assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code (replace A@B with np.dot(A,B) )"
 
-""" 
-ops.py
-Defines linear operators, such as OSS, resolvent, resolvent with eddy, etc... 
-Problem definition must be supplied with keyword arguments
-
-IMPORTANT: Everything here is written only for internal nodes. 
-            Variables at the wall are always ignored. 
-            y,v represent wall-normal
-"""
-covDataDir = os.environ['DATA']+ 'covN127/'
 class linearize(object):
     def __init__(self, N=151, U=None,dU=None, d2U=None,flowClass="channel",Re=2000., **kwargs):
         """
-        Initialize OSS class instance. 
+        Initialize linearize class instance. 
         Inputs:
             N(=151)      :   Number of internal nodes (x2 for BL to cover eta <0)
             U(=None)    :   Spatiotemporal mean streamwise velocity
@@ -55,7 +60,8 @@ class linearize(object):
                                     so that 2-norm of the weighted versions give energy norm of the original.
             _deweightVec, _deweightMat: Revert weighted versions to original unweighted versions 
             makeSystem: Returns OSS, input, and output matrices; optionally, adjoints of these matrices.
-            dynamicsMat, inputMat, outputMat: Extract from makeSystem if others aren't needed
+            dynamicsMat, velVor2primitivesMat, outputMat, primitives2velVorMat: Extract from makeSystem if others aren't needed
+            matNorm: Matrix norm, use kwarg to define the norm.
             
         """
         N = np.int(N)
@@ -408,6 +414,7 @@ class linearize(object):
 
    
 
+covDataDir = os.environ['DATA']+ 'covN127/'
 class statComp(linearize):
     def __init__(self,a=0.25,b=20./3.,Re=186.,**kwargs):
         """
