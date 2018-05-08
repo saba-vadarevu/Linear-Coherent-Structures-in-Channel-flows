@@ -321,14 +321,17 @@ class linearize(object):
                     Cadj = 1./k2 * np.vstack(( 
                                         np.hstack(( 1.j*a*D1,  k2*I1,  1.j*b*D1 )),
                                         np.hstack(( 1.j*b*I1,  Z1   ,  -1.j*a*I1))  ))
-                elif False:
+                elif True :
                     Badj = (1./k2) * np.vstack(( 
                                         np.hstack(( -1.j*a*D1  ,  -1.j*b*I1 )), 
                                         np.hstack(( k2 * I1    ,  Z1        )),
                                         np.hstack(( -1.j*b*D1  ,  1.j* a*I1 ))   ))
-                    Cadj = (1./k2**2) * np.vstack(( 
+                    Cadj = (1./k2) * np.vstack(( 
                                         np.hstack(( 1.j*a*DeltaInv@D1, -k2*DeltaInv, 1.j*b*DeltaInv@D1 )),
                                         np.hstack(( 1.j*b*I1         , Z1          , -1.j*a*I1  ))   ))
+                elif True :
+                    Badj = C
+                    Cadj = B
                 else:
                     # For now, just go with adjoints being complex conjugates
                     # This bit really needs fixing though

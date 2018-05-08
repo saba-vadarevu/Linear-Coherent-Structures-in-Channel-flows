@@ -265,16 +265,18 @@ def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impuls
 
     aArr = aArr.flatten(); bArr = bArr.flatten()
 
+    Re = flowDict['Re']; N = flowDict['N']
     if (impulseArgs is None) :
         warn("impulseArgs is not supplied. CHECK THE DEFAULTS FOR IMPULSE ARGS IN impres.timeMap().")
-    elif not (set(('y0','eps','N','Re')) <= set(impulseArgs)) :
+        impulseArgs = {'y0':-0.9}
+    elif not (set(('y0','eps')) <= set(impulseArgs)) :
         warn("Not all required keys are supplied. CHECK THE DEFAULTS FOR IMPULSE ARGS IN impres.timeMap().")
         print("Supplied keys in impulseArgs are", impulseArgs.keys())
+    impulseArgs.update({'Re':Re, 'N':N})
 
     #==============================
     # Create linInst if not supplied
     #=============
-    Re = flowDict.get('Re',2000.)
     if flowDict.get('flowState','turb') == 'turb':
         turb = True
     else : turb = False
@@ -509,7 +511,7 @@ class flowField(np.ndarray):
     """
     def __new__(cls, *args, flowDict=None,**kwargs):
         """Creates a new instance of flowField class, call as
-            flowField(aArr, bArr, N ,flowDict=flowDict)
+            flowField(aArr, bArr, N ,flowDict={'N', 'Re', 'flowClass','flowState','eddy','t'})
         """
         if flowDict is None :
             flowDict= defaultDict

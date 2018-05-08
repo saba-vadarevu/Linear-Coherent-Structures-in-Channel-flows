@@ -218,7 +218,7 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
             impulseArgs (=None):Build impulse function (wall-normal using this)
                                     keys:   'fs' 
                                     If 'fs' is not supplied, use
-                                        'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
+                                        'y0', 'eps', and N,Re,turb,eddy from linInst to build fs using _fs()
     Outputs:
             outDict: dict with keys 
                         'energyArr', 'coeffArr' (if input kwargs 'coeffs' is True)
@@ -284,7 +284,9 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
         assert set(( 'N','Re' )) <= set(modeDict)
         modeDict['turb'] =modeDict.get('turb', False )
         linInst = ops.linearize(flowClass='channel', **modeDict)
-    N = linInst.N
+    N = linInst.N; Re = linInst.Re
+    # See if flow is turbulent
+    turb = (linInst.flowState == 'turb')
     
     # Construct system matrices for the dynamical system:
     #   d_t psi  = A  psi + B @ fs  delta(t)
@@ -303,12 +305,10 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     # Forcing vectors 
     #==============
     # Function to build Fs for each fsAmp[k]
-    # See if flow is turbulent
-    turb = (linInst.flowState == 'turb')
     if impulseArgs is None :
-        impulseArgs = {'eddy':eddy, 'turb':turb}
+        impulseArgs = {'eddy':eddy, 'turb':turb, 'N':N, 'Re':Re}
     else :
-        impulseArgs.update({'eddy':eddy, 'turb':turb })
+        impulseArgs.update({'eddy':eddy, 'turb':turb,'N':N, 'Re':Re })
 
 
     if 'fsAmp' in impulseArgs.keys(): impulseArgs.pop('fsAmp')
@@ -405,7 +405,7 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
 
 def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False, 
         epsArr = np.array([1./2000.]), y0Arr= np.array([-0.9]),
-        tau=None):
+        fsAmp=np.identity(3), tau=None):
     """ Compute H2 norms for Fourier modes
     Inputs:
         aArr :  Range of streamwise wavenumbers
@@ -414,25 +414,48 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
         N  (= 41 ) : Number of collocation nodes (internal)
         turb (=False):  If True, use turbulent base flow, otherwise laminar
         eddy (=False):  If True, use eddy viscosity in the dynamics matrix
-        tau (=None): If set to a positive integer, 
+        tau (=None): If set to a positive integer, uses exponential discounting,
+                    by multiplying the energy at each time with e^{-t/tau},
+                    so that later times (scaled by tau) contribute lesser to the norm
     Outputs:
         H2normArr   of shape (aArr.size,bArr.size)
     """
     linInst = ops.linearize(N=N, Re=Re, turb=turb, flowClass='channel')
-    H2normArr = np.zeros((aArr.size, bArr.size, epsArr.size, y0Arr.size, 4))
+    weightDict = pseudo.weightMats(N)
+    H2normArr = np.zeros((aArr.size, bArr.size, y0Arr.size, fsAmp.shape[0]))
     I2 = np.identity(2*N, dtype=np.complex)
     if (tau is not None) and (tau > 0.):
         print("Using exponential discounting for finite time horizon, over tau=", tau)
         diffA = -(1./tau)* I2
     else : diffA = 0.*I2
 
-    fsArr = np.zeros((epsArr.size, y0Arr.size, N)) # This doesn't change much
+    fsArr = np.zeros((y0Arr.size, fsAmp.shape[0],3*N)) 
     y = linInst.y
-    for i2 in range(epsArr.size):
-        eps = epsArr[i2]
-        for i3 in range(y0Arr.size):
-            y0 = y0Arr[i3]
-            fsArr[i2,i3] = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
+    N = linInst.N
+    D1= linInst.D1
+    W2 = weightDict['W2']
+    for i2 in range(y0Arr.size):
+        try :
+            eps = epsArr[i2]
+        except :
+            eps = epsArr[-1]
+        y0 = y0Arr[i2]
+        fsArr[i2] = _fs(fsAmp=fsAmp, eps=eps, y0=y0, N=N, Re=Re, turb=turb)['fs']
+
+    def _FsFun(fsVec, a, b, DeltaInv):
+        # fsVec should be shape (3,N) 
+        fsVec = fsVec.reshape((3,N))
+        Fs = np.zeros((2*N),dtype=np.complex)
+        Fsadj = Fs.copy()
+        Fs[:N] += -1.j*a*DeltaInv @ (D1@fsVec[0]); Fs[N:] += 1.j*b*fsVec[0]
+        Fs[:N] += -(a**2+b**2)*DeltaInv @ fsVec[1]; Fs[N:] += 0.
+        Fs[:N] += -1.j*b*DeltaInv @ (D1@fsVec[2]);  Fs[N:] += -1.j*a*fsVec[2]
+
+        Fsadj += 1./(a**2+b**2) * W2 @ np.concatenate(( -1.j*a*D1@fsVec[0], -1.j*b*fsVec[0]  ))
+        Fsadj += W2 @ np.concatenate(( fsVec[1], np.zeros(N,dtype=np.complex) ))
+        Fsadj += 1./(a**2+b**2) * W2 @ np.concatenate(( -1.j*b*D1@fsVec[2],  1.j*a*fsVec[2]  ))
+        return Fs, Fsadj
+    
     #print("Running for aArr=",aArr)
     for i0 in range(aArr.size):
         a = aArr[i0]
@@ -442,7 +465,9 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
 
             systemDict = linInst.makeSystem(a=a,b=b,eddy=eddy, adjoint=True)
             A = systemDict['A']; Aadj = systemDict['Aadj']
-            C = systemDict['C']; Cadj = systemDict['Cadj']
+            C = systemDict['C']; B = systemDict['B'];
+            Cadj = B.copy()
+
             DeltaInv = systemDict['DeltaInv']
             
             # In case finite time horizon is to be used
@@ -450,17 +475,19 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
             Aadj = Aadj + diffA
 
             Y = solve_sylvester( Aadj, A, -Cadj @ C )
-            for i2 in range(epsArr.size):
-                eps = epsArr[i2]
-                for i3 in range(y0Arr.size):
-                    y0 = y0Arr[i3]
-                    impulseFunDict = impulseVec(a,b,fs=fsArr[i2,i3], DeltaInv=DeltaInv, D1=linInst.D1)
-                    for i4 in range(4):
-                        Fs = impulseFunDict['Fs'][i4].reshape((2*N,1))
-                        FsAdj = impulseFunDict['FsAdj'][i4].reshape((1,2*N))
+            for i2 in range(y0Arr.size):
+                y0 = y0Arr[i2]
+                try :
+                    eps = epsArr[i2]
+                except :
+                    epsArr[-1]
 
-                        H2normArr[i0,i1,i2,i3,i4] = np.real(np.trace( FsAdj @ Y @ Fs ))
 
-    return H2normArr
+                for i3 in range(fsAmp.shape[0]):
+                    fsVec = fsArr[i2,i3].flatten()
+                    Fs, Fsadj = _FsFun(fsVec,a,b,DeltaInv)
+                    H2normArr[i0,i1,i2,i3] = np.real( Fsadj @ Y @ Fs )
+
+    return np.sqrt(2.*H2normArr)
 
 
