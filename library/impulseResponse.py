@@ -3,6 +3,15 @@
 Define functions that take as parameters the Fourier wavenumbers, time, direction and amplitude of impulse, 
 and return the Fourier coefficients or energy at that particular time.
 Also, H2norms for inifinite time and finite time horizons.
+
+Functions:
+    (_adjustEps, _fs0, _fs used internally)
+    _adjustEps: Find 'eps' to parametrize 'smoothness' of impulse so it's captured by Cheb collocation
+                    For (ReTau,N)=(10^4, 768), use eps = y0plus/4; for smaller eps, say eps=y0plus, smaller 'N' can be used
+    _fs0: Wall-normal approximation for a scalar impulse
+    _fs:  Wall-normal approximation for a vector impulse
+    timeMap: Impulse response for a single Fourier mode (kx,kz) for a set of times and forcing directions
+    H2norm: H2 norms for a set of kx, kz for a specified impulse (H2 norm is integral of energy over time, 0 to inf)
 """
 import numpy as np
 from numpy.linalg import matrix_power
@@ -102,6 +111,25 @@ def _adjustEps(Re=None, epsNom=None, y0=None, y0plus=None, N=None,epsArr=None, r
 
 
 def _fs0(**kwargs):
+    """
+        Wall-normal approximation of an impulse (scalar)
+        Function defined as
+            fs0_turb = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(- (Re*(y-y0))**2 / 4./eps )
+            or 
+            fs0_lam = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
+        Inputs:
+            turb (=True) 
+            Re (=2000): Interpreted as ReTau when turb=True, otherwise irrelevant
+            eps (=50 for turb, 1/2000 for lam)
+            N (=251 for turb, 41 for lam)
+            y0 (= -1+200/Re for turb, -0.9 for lam)
+        Outputs:
+            Dict with keys
+                N (int) 
+                Re, y0, eps  (floats)
+                fs0, y (arrays of shape (N,))
+                DM (array of shape (N,N,2))
+    """
     if kwargs.get('turb', True):
         # Turbulent case
         if 'Re' not in kwargs: Re = 2000.; warn("Re not supplied. Using 2000...")
@@ -139,6 +167,21 @@ def _fs0(**kwargs):
     return fsDict
 
 def _fs(fsAmp=None, **kwargs):
+    """
+        Wall-normal approximation of an impulse (vector)
+        The vector is composed of (ax*fs0, ay*fs0, az*fs0), with fs0 computed from _fs0
+        Inputs:
+            fsAmp: Define (ax, ay, az) above, so that norm of the vector is unity
+            kwargs: Arguments to pass to _fs0
+        Outputs:
+            Dict with keys
+                N (int) 
+                Re, y0, eps  (floats)
+                fsAmp (list with 3 floats as elements)
+                fs0, y (arrays of shape (N,))
+                fs (array of shape (3N,))
+                DM (array of shape (N,N,2))
+    """
     fsDict = _fs0(**kwargs)
     fs0 = fsDict['fs0']
     if fsAmp is None : fsAmp = np.array([1.,0.,0.]) # [1*fs0, 0*fs0, 0*fs0]
@@ -154,7 +197,6 @@ def _fs(fsAmp=None, **kwargs):
         fs[m] = normalize(fs[m])
     fsDict.update({'fsAmp':fsAmp, 'fs':fs})
     return fsDict
-
 
 
 
@@ -176,7 +218,7 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
             impulseArgs (=None):Build impulse function (wall-normal using this)
                                     keys:   'fs' 
                                     If 'fs' is not supplied, use
-                                        'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
+                                        'y0', 'eps', and N,Re,turb,eddy from linInst to build fs using _fs()
     Outputs:
             outDict: dict with keys 
                         'energyArr', 'coeffArr' (if input kwargs 'coeffs' is True)
@@ -242,7 +284,9 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
         assert set(( 'N','Re' )) <= set(modeDict)
         modeDict['turb'] =modeDict.get('turb', False )
         linInst = ops.linearize(flowClass='channel', **modeDict)
-    N = linInst.N
+    N = linInst.N; Re = linInst.Re
+    # See if flow is turbulent
+    turb = (linInst.flowState == 'turb')
     
     # Construct system matrices for the dynamical system:
     #   d_t psi  = A  psi + B @ fs  delta(t)
@@ -261,12 +305,10 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
     # Forcing vectors 
     #==============
     # Function to build Fs for each fsAmp[k]
-    # See if flow is turbulent
-    turb = (linInst.flowState == 'turb')
     if impulseArgs is None :
-        impulseArgs = {'eddy':eddy, 'turb':turb}
+        impulseArgs = {'eddy':eddy, 'turb':turb, 'N':N, 'Re':Re}
     else :
-        impulseArgs.update({'eddy':eddy, 'turb':turb })
+        impulseArgs.update({'eddy':eddy, 'turb':turb,'N':N, 'Re':Re })
 
 
     if 'fsAmp' in impulseArgs.keys(): impulseArgs.pop('fsAmp')
@@ -361,118 +403,9 @@ def timeMap(a,b,tArr,fsAmp=None, coeffs=False, linInst=None, modeDict=None, eddy
 
 
 
-def evolveField(aArr, bArr, t, linInst=None,modeDict=None, eddy=False,
-        fsAmp=None, impulseArgs=None):
-    """
-    Return Fourier coeffs a complete set of Fourier modes for a single forcing and time
-    DO NOT CALL THIS DIRECTLY. Call from flowField.evolveImpulse() which returns a flowField instance.
-    Inputs:
-        Compulsory args:
-            aArr, bArr, t: wavenumber sets and time
-        keyword args:
-            fsAmp (=None):      Relative amplitudes of fx, fy, fz, of size 3
-                                    If not supplied, use [[1,0,0]]
-                                    The total energy in [fx,fy,fz] will be normalized
-            linInst (=None):    Instance of class linearize(). 
-            modeDict (=None):   If linInst is not supplied, use modeDict to build linInst
-                                    keys:   'N', 'Re', 'turb'
-            eddy (=False):      If True, use eddy viscosity
-            impulseArgs (=None):Build impulse function (wall-normal using this)
-                                    keys:   'fs' 
-                                    If 'fs' is not supplied, use
-                                        'y0', 'eps', linInst.N, linInst.Re to build fs using _fs()
-    Outputs:
-            outDict: dict with keys 
-                        'coeffArr'
-                        'fs', 'y0', 'eps', 'a', 'b', 'tArr', 'N', 'Re', 'turb', 'eddy','fsAmp'
-                        If 'fs' was supplied as input to function, set y0 and eps to None
-    """
-    #=====================================================================
-    # Warn if aArr or bArr are not of the right form 
-    #===========================
-    a0 = np.min(np.abs(aArr[np.nonzero(aArr)])) 
-    b0 = np.min(np.abs(bArr[np.nonzero(bArr)])) 
-    aArr.sort(); bArr.sort()
-    #pdb.set_trace()
-    if not _areSame(aArr, a0*np.arange(-(aArr.size//2), aArr.size//2)):
-        print("aArr isn't in ifft order... Have a look, aArr/a0 is:", aArr/a0)
-    if not _areSame(bArr, b0*np.arange( bArr.size)):
-        print("bArr isn't in ifft order... Have a look, bArr/b0 is:", bArr/b0)
-
-
-    ################################
-    if linInst is None :
-        # Ensure modeDict has entries for N and Re. turb defaults to False 
-        assert set(( 'N','Re' )) <= set(modeDict)
-        modeDict['turb'] = modeDict.get('turb', False)
-        linInst = ops.linearize(flowClass='channel', **modeDict)
-    N = linInst.N
-    W = linInst.weightDict['W1']   
-    w = linInst.w
-    
-    #=================================================================
-    # Forcing vector 
-    #==============
-    # Function to build Fs from fsAmp[k]
-    if fsAmp is None : 
-        warn("fsAmp not supplied, using [1,0,0]...")
-
-    if impulseArgs is None :
-        impulseArgs = {'eddy':eddy, 'turb':(linInst.flowState=='turb')}
-    else :
-        impulseArgs.update({'eddy':eddy, 'turb':(linInst.flowState=='turb') })
-    if 'fsAmp' in impulseArgs: impulseArgs.pop('fsAmp')
-    fsDict = _fs(fsAmp=fsAmp, **impulseArgs)
-    fs = fsDict['fs']; 
-    fs = fs.reshape((3*N,1))  
-
-    #====================================================================
-    # Define a function to handle mode-wise evolution to save space later
-    #=======================
-    # Construct system matrices for the dynamical system:
-    #   d_t psi  = A  psi + B @ fs  delta(t)
-    #   [u, v, w]= C  psi ,         where psi = [v, omega_y] 
-    # So that [u v w] = C @ (e^{At}) @ Fs, and similarly for v, w 
-    def modewiseEvolve(a,b):
-        systemDict = linInst.makeSystem(a=a, b=b, adjoint=False, eddy=eddy)
-        C = systemDict['C'] 
-        B = systemDict['B']
-        if t == 0. :
-            return (C @ B @ fs).flatten()
-        else :
-            A = systemDict['A']
-            return (C @ expm(A*t) @ B @ fs).flatten()
-
-
-    
-    #==================================================================
-    # Define arrays and do the looping 
-    #==================
-    coeffArr = np.zeros((aArr.size, bArr.size, 3*N), dtype=np.complex)
-
-    for i0 in range(aArr.size):
-        a = aArr[i0]
-        for i1 in range(bArr.size):
-            b = bArr[i1]
-            if (a==0) and (b==0): 
-                continue
-
-            coeffArr[i0,i1] = modewiseEvolve(a,b)
-
-    if impulseArgs is None : impulseArgs = {}
-    impulseArgs.update(fsDict)
-    impulseArgs.update({'fsAmp':fsAmp, 'N':N, 'Re':linInst.Re, 'aArr':aArr, 'bArr':bArr, 't':t,\
-            'turb':(linInst.flowState=='turb'), 'eddy':eddy })
-    outDict= impulseArgs
-    outDict.update({'coeffArr':coeffArr})
-
-    return outDict 
-
-
-
 def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False, 
         epsArr = np.array([1./2000.]), y0Arr= np.array([-0.9]),
-        tau=None):
+        fsAmp=np.identity(3), tau=None):
     """ Compute H2 norms for Fourier modes
     Inputs:
         aArr :  Range of streamwise wavenumbers
@@ -481,25 +414,48 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
         N  (= 41 ) : Number of collocation nodes (internal)
         turb (=False):  If True, use turbulent base flow, otherwise laminar
         eddy (=False):  If True, use eddy viscosity in the dynamics matrix
-        tau (=None): If set to a positive integer, 
+        tau (=None): If set to a positive integer, uses exponential discounting,
+                    by multiplying the energy at each time with e^{-t/tau},
+                    so that later times (scaled by tau) contribute lesser to the norm
     Outputs:
         H2normArr   of shape (aArr.size,bArr.size)
     """
     linInst = ops.linearize(N=N, Re=Re, turb=turb, flowClass='channel')
-    H2normArr = np.zeros((aArr.size, bArr.size, epsArr.size, y0Arr.size, 4))
+    weightDict = pseudo.weightMats(N)
+    H2normArr = np.zeros((aArr.size, bArr.size, y0Arr.size, fsAmp.shape[0]))
     I2 = np.identity(2*N, dtype=np.complex)
     if (tau is not None) and (tau > 0.):
         print("Using exponential discounting for finite time horizon, over tau=", tau)
         diffA = -(1./tau)* I2
     else : diffA = 0.*I2
 
-    fsArr = np.zeros((epsArr.size, y0Arr.size, N)) # This doesn't change much
+    fsArr = np.zeros((y0Arr.size, fsAmp.shape[0],3*N)) 
     y = linInst.y
-    for i2 in range(epsArr.size):
-        eps = epsArr[i2]
-        for i3 in range(y0Arr.size):
-            y0 = y0Arr[i3]
-            fsArr[i2,i3] = 1./(2.*np.sqrt(np.pi * eps )) * np.exp(-(y-y0)**2 / 4./eps )
+    N = linInst.N
+    D1= linInst.D1
+    W2 = weightDict['W2']
+    for i2 in range(y0Arr.size):
+        try :
+            eps = epsArr[i2]
+        except :
+            eps = epsArr[-1]
+        y0 = y0Arr[i2]
+        fsArr[i2] = _fs(fsAmp=fsAmp, eps=eps, y0=y0, N=N, Re=Re, turb=turb)['fs']
+
+    def _FsFun(fsVec, a, b, DeltaInv):
+        # fsVec should be shape (3,N) 
+        fsVec = fsVec.reshape((3,N))
+        Fs = np.zeros((2*N),dtype=np.complex)
+        Fsadj = Fs.copy()
+        Fs[:N] += -1.j*a*DeltaInv @ (D1@fsVec[0]); Fs[N:] += 1.j*b*fsVec[0]
+        Fs[:N] += -(a**2+b**2)*DeltaInv @ fsVec[1]; Fs[N:] += 0.
+        Fs[:N] += -1.j*b*DeltaInv @ (D1@fsVec[2]);  Fs[N:] += -1.j*a*fsVec[2]
+
+        Fsadj += 1./(a**2+b**2) * W2 @ np.concatenate(( -1.j*a*D1@fsVec[0], -1.j*b*fsVec[0]  ))
+        Fsadj += W2 @ np.concatenate(( fsVec[1], np.zeros(N,dtype=np.complex) ))
+        Fsadj += 1./(a**2+b**2) * W2 @ np.concatenate(( -1.j*b*D1@fsVec[2],  1.j*a*fsVec[2]  ))
+        return Fs, Fsadj
+    
     #print("Running for aArr=",aArr)
     for i0 in range(aArr.size):
         a = aArr[i0]
@@ -509,7 +465,9 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
 
             systemDict = linInst.makeSystem(a=a,b=b,eddy=eddy, adjoint=True)
             A = systemDict['A']; Aadj = systemDict['Aadj']
-            C = systemDict['C']; Cadj = systemDict['Cadj']
+            C = systemDict['C']; B = systemDict['B'];
+            Cadj = B.copy()
+
             DeltaInv = systemDict['DeltaInv']
             
             # In case finite time horizon is to be used
@@ -517,17 +475,19 @@ def H2norm(aArr, bArr, Re=2000., N=41, turb=False, eddy=False,
             Aadj = Aadj + diffA
 
             Y = solve_sylvester( Aadj, A, -Cadj @ C )
-            for i2 in range(epsArr.size):
-                eps = epsArr[i2]
-                for i3 in range(y0Arr.size):
-                    y0 = y0Arr[i3]
-                    impulseFunDict = impulseVec(a,b,fs=fsArr[i2,i3], DeltaInv=DeltaInv, D1=linInst.D1)
-                    for i4 in range(4):
-                        Fs = impulseFunDict['Fs'][i4].reshape((2*N,1))
-                        FsAdj = impulseFunDict['FsAdj'][i4].reshape((1,2*N))
+            for i2 in range(y0Arr.size):
+                y0 = y0Arr[i2]
+                try :
+                    eps = epsArr[i2]
+                except :
+                    epsArr[-1]
 
-                        H2normArr[i0,i1,i2,i3,i4] = np.real(np.trace( FsAdj @ Y @ Fs ))
 
-    return H2normArr
+                for i3 in range(fsAmp.shape[0]):
+                    fsVec = fsArr[i2,i3].flatten()
+                    Fs, Fsadj = _FsFun(fsVec,a,b,DeltaInv)
+                    H2normArr[i0,i1,i2,i3] = np.real( Fsadj @ Y @ Fs )
+
+    return np.sqrt(2.*H2normArr)
 
 
