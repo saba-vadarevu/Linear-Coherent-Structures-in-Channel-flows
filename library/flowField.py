@@ -350,6 +350,244 @@ def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impuls
 
     return impresArray 
 
+def resolventMode(a,b,omegaArr,N,Re,
+        turb=True,eddy=False,flowClass='channel',
+        tArr=None,phaseArr=None,modeNumber=1,
+        modeSymm=2, symmLegend=['symm','anti','bottom','top']):
+    """ Return flowField instance corresponding to (a,b)
+        Inputs:
+            (Positional)
+            a : Streamwise wavenumber
+            b : Spanwise wavenumber
+            omegaArr: Frequencies; can be array, list, or float
+            N : No. of cheb nodes
+            Re: Reynolds number (ReTau for turbulent, ReCL for laminar)
+
+            (Keyword)
+            turb (=True)
+            eddy (=False)
+            flowClass (='channel')
+            tArr (=None): Set of times (just 0 by default)
+            phaseArr (=None): Phases for different omega-modes, 0 by default
+            modeNumber (=1): Can be float or np.ndarray (of size omegaArr.size) 
+                            Allows probing resolvent modes that aren't the first
+            symmLegend (=..): List containing strings that specify symmetries:
+                            'bottom', 'top', 'symm', 'anti', meaning
+                            predominatly in y<0, predominantly in y>0, symmetric, anti-symmetric
+                            The actual symmetry imposed is given in modeSymm
+            modeSymm (='bottom'): Symmetry of the resolvent mode (when two modes with equal singular values exist)
+                            The symmetry is specified as symmLegend[modeSymm]
+                            Can be int, or array of ints of shape (omegaArr.size,), (1,omegaArr.size), or (2, omegaArr.size);
+                            first case applies same symm for all omega, second and third changes symm by omega but doesn't change for left and right leaning for a constant omega, fourth changes for each omega and each of left and right leaning modes
+
+        Outputs:
+            ff: flowField instance of shape (4,2,3,N)
+                    4 streamwise wavenumbers are used: {0,a,-2a,-a}
+                        to be consistent with the standard for flowField class
+                    The coefficients for (-2a,b) and (0,b) are set to 0,
+                        and calculated only for (a,b) and (-a,b)
+    """
+    #=========================================
+    # Simple pre-processing
+    #====================
+    omegaArr = np.array([omegaArr]).flatten()
+    if (a== 0.) or (b==0.): print("The code isn't meant for cases with either a or b being 0...")
+    aArr = np.array([0.,abs(a),-2*abs(a),-abs(a)]) 
+    bArr = np.array([0.,b])
+   
+    #"""
+    warn("Calculating for (a,b,omega) and (-a,b,omega).")
+    warn("To set (-a,b,omega) coefficient to zero, set ff[-1] = 0, ff is the returned flowField instance.")
+    #"""
+    if turb: flowState='turb'
+    else : flowState='lam'
+    
+    pdb.set_trace()
+    # modeNumber prescribes the resolvent mode number to choose for each omega
+    modeNumber = np.array([modeNumber]).flatten()
+    if modeNumber.size==omegaArr.size:
+        modeNumber = np.concatenate((modeNumber.flatten(),modeNumber.flatten())).reshape((2, omegaArr.size))
+    elif modeNumber.size==2*omegaArr.size:
+        modeNumber = modeNumber.reshape((2, omegaArr.size))
+    else : 
+        modeNumber = modeNumber[0]*np.ones((2,omegaArr.size),dtype=np.int)
+    modeNumber[modeNumber<1] = 1
+    modeNumber = modeNumber.astype(np.int)
+    warn("Same number for resolvent mode used for left and right leaning waves")
+    
+    # modeSymm prescribes the wall-normall symmetry for each omega
+    modeSymm = np.array([modeSymm]).flatten()
+    if modeSymm.size==omegaArr.size:
+        modeSymm = np.concatenate((modeSymm.flatten(),modeSymm.flatten())).reshape((2, omegaArr.size))
+    elif modeSymm.size==2*omegaArr.size:
+        modeSymm = modeSymm.reshape((2, omegaArr.size))
+    else : 
+        modeSymm = modeSymm[0]*np.ones((2,omegaArr.size),dtype=np.int)
+    modeSymm = modeSymm%len(symmLegend)   
+    modeSymm = modeSymm.astype(np.int)
+    warn("Same wall-normal symmetry is used for left and right leaning waves")
+
+    #========================================
+    # Default phase: 0
+    #===================
+    if phaseArr is not None :
+        if phaseArr.size == 2*omegaArr.size : 
+            phaseArr = phaseArr.reshape((2,omegaArr.size))
+        elif phaseArr.size == omegaArr.size:
+            phaseArr = np.concatenate((phaseArr.flatten(),phaseArr.flatten())).reshape((2,omegaArr.size))
+        else :
+            warn("phaseArr.size is neither omegaArr.size nor 2*omegaArr.size")
+            phaseArr = np.zeros((2,omegaArr.size))
+    else : phaseArr = np.zeros((2,omegaArr.size))
+
+    #================================
+    # Reflectional symmetry and assigning coeffs for 4 related Fourier modes:
+
+    # Modes (a,b,omega), (a,-b,omega), (-a,b,-omega), and (-a,-b,-omega) are related;
+    # The last two's coefficients should be complex conjugates of those of the first two
+    #   for real-valuedness
+    # The first and second are, for a,omega > 0, forward travelling waves that go     
+    #   left and right for differing polarity of b
+    # We ignore omega dependence, with the understanding that omega=a*c, and c is fixed 
+    # flowField class assumes (a,b) and (-a,b) are both populated.
+    # So, populate coeffs of (-a,b) from coeffs of (a,b) using reflectional symmetry,
+    #   [u,v,w](x,y,-z) = [u,v,-w](x,y,z), 
+    # which leads to the following relations between Fourier coefficients:
+    # u_{a,b} = conj(u_{-a,b}) = u_{a,-b} = conj(u_{-a,-b})
+    # The same relations hold for v, while for w, 
+    # w_{a,b} =-conj(w_{-a,b}) =-w_{a,-b} = conj(w_{-a,-b})
+    # So, for u and v, swapping the sign of 'b' doesn't change the coefficient, 
+    #   while swapping the sign of 'a' makes it complex conjugate
+    # For w, swapping the sign of 'b' makes the coefficient negative, 
+    #   while swapping the sign of 'a' makes it complex conjugate and negative
+    #===========
+
+    #==========================================
+    # Get resolvent modes for mode (+a, +b) for each omega; see later for (-a,+b)
+    #==================
+    linInst = ops.linearize(N=N,flowClass=flowClass,Re=Re,turb=turb)
+    modeArr = np.zeros((aArr.size, bArr.size, omegaArr.size, 3*N),dtype=np.complex)
+    #pdb.set_trace()
+    if a > 0. : ix0 = 1; ix1 = 3
+    else : ix0 = 3; ix1 = 1
+    for i2 in range(omegaArr.size):
+        omega = omegaArr[i2]
+        resDict = linInst.getResolventModes(a, b, omega, 
+                nSvals=modeNumber[0,i2]+1, eddy=eddy)
+        svals = resDict['svals']
+        # resDict['velocityModes'] should be shape (n_singModes, 3*N)
+        
+        # Check if singular values occur in pairs
+        nMode = modeNumber[0,i2] 
+        if (nMode%2 == 0):
+            nMode1 = nMode-1; nMode2 = nMode
+        else :
+            nMode1 = nMode; nMode2 = nMode+1
+
+        if (np.abs( svals[nMode1-1]-svals[nMode2-1])/svals[nMode-1] > 1.e-6 ):
+            # Singular values are not equal; use mode number 'nMode'(-1)
+            # Above, we used tolerance for relative error of 1.e-6
+            velMode = resDict['velocityModes'][nMode-1]
+        else :
+            # There is a pair of singular values
+            # Apply symmetries to get the appropriate linear combination
+            velMode1 = resDict['velocityModes'][nMode1-1].reshape((3,N))
+            velMode2 = resDict['velocityModes'][nMode2-1].reshape((3,N))
+            modeDict = _modeSymms(velMode1,velMode2, N=N)
+            if modeDict['err'] > 1.e-6:
+                print("The symmetries don't seem to hold; err=%.3g"%modeDict['err'])
+            velMode = modeDict[symmLegend[modeSymm[0,i2]]].flatten()
+            # modeDict has keys 'symm','anti','bottom', and 'top'
+            # symmLegend is a list containing a subset of the above keys
+            # symmLegend[modeSymm[.]] specifies which key to use
+
+        if b > 0 :
+            # 'b' is positive in self.bArr; so it's sign doesn't have to be swapped
+            modeArr[ix0,1,i2] = velMode.copy() # The a used to compute resolvent mode
+            # Now, for -a; u and v are just conjugates, w is negative conjugate
+            velMode[2*N:] *= -1.
+            modeArr[ix1,1,i2] = np.conj(velMode)
+        else :
+            # 'b' in the computation was negative, but we're populating for positive 'b'  
+            # No change for u and v, negative for w
+            velMode[2*N:] = -1.* velMode[2*N:]
+
+            modeArr[ix0,1,i2] = velMode.copy()
+            # Now, for -a; u and v are just conjugates, w is negative conjugate
+            velMode[2*N:] *= -1.
+            modeArr[ix1,1,i2] = np.conj(velMode)
+   
+        #"""
+        warn("For mode (-a,b), using reflexive symmetry about z=0 plane:")
+        warn("[u,v,w](x,y,-z) = [u,v,-w](x,y,z)")
+        warn("Applied as u_{a,b}=u_{a,-b}=conj(u_{-a,b})=conj(u_{-a,-b})")
+        warn("This symmetry can be broken (shifted) by setting unequal phases for left and right leaning waves")
+        #"""
+    
+
+    #=============================================
+    # Exponent of phase, e^i*phi
+    #===========
+    expPhaseArrLong = np.ones((4,2,omegaArr.size,1),dtype=np.complex)   # Remember, aArr.size=4, bArr.size=2
+    expPhaseArrLong[ 1,1,:,0] = np.exp(1.j*phaseArr[0])# (a,b) 
+    expPhaseArrLong[-1,1,:,0] = np.exp(1.j*phaseArr[1])# (-a,b)
+    modeArr = modeArr*expPhaseArrLong
+
+    if tArr is None : tArr = np.array([0.])
+    else : tArr = np.array([tArr]).flatten()
+
+    if (tArr.size == 1) and (tArr[0] == 0.):
+        flowDict ={'Re':Re,'N':N,'flowState':flowState,'flowClass':flowClass,\
+                'eddy':eddy, 't':tArr[0]}
+        ff = flowField(aArr,bArr,N,flowDict=flowDict)
+        #ff[:] = np.sum(modeArr,axis=2).reshape((aArr.size, bArr.size,3,N))
+        ff[:] = modeArr.reshape((aArr.size, bArr.size, 3,N))
+        return ff
+    else :
+        ffList = []
+        for i3 in range(tArr.size):
+            t = tArr[i3]
+            # We consider modes (a,b,omega), (-a,b,-omega), and their negatives
+            #  Defining c = |omega|/|a|, and setting omega = a*c accounts for the sign of omega
+            cArr = np.abs(omegaArr/a).reshape((1,1,omegaArr.size,1))
+            acArr= self.aArr.reshape((self.aArr.size,1,1,1))*cArr
+            warn("Phase speed, c, is assumed to be positive")
+
+            expArr = np.exp(-1.j*acArr*t)
+            flowDict ={'Re':Re,'N':N,'flowState':flowState,'flowClass':flowClass,\
+                    'eddy':eddy, 't':t}
+            ff = flowField(aArr,bArr,N,flowDict=flowDict) # Initialize with zeros 
+            ff[:] = np.sum(modeArr*expArr,axis=2).reshape((aArr.size,bArr.size,3,N))
+            # modeArr contains coeffs for t=0; to get coeffs at a later t, 
+            #   multiply by e^{-i*a*c*t} for each travelling wave, 
+            #   and add all of these travelling waves to get field at time t
+
+            ffList.append(ff)
+         
+        return ffList
+
+
+
+
+
+def resolventField(aArr, bArr, omegaArr, N, Re, turb=True, eddy=False, 
+        modeArr=None, phaseArr=None, tArr=None):
+    """
+        Create flowField instance as collection of resolvent modes
+    """
+    if tArr is not None : 
+        warn("tArr is not supported yet.")
+    if phaseArr is not None :
+        warn("phaseArr is not supported yet. Phase difference set to 0.")
+    if modeArr is not None :
+        warn("modeArr is not supported yet. Using first resolvent mode only.")
+   
+    pass 
+
+    
+
+
+
 def loadff(fName,printOut=True):
     """ Load flowField instance from .mat file
         Inputs:
@@ -698,7 +936,7 @@ class flowField(np.ndarray):
 
 
 
-    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False, **kwargs):
+    def toPhysical(self, arr=None, x0=None, lx=None, z0=None, N=None, ySpace='cheb', doSort=False, ifft=True, **kwargs):
         """
         Get physical fields from spectral
         Inputs:
@@ -712,8 +950,8 @@ class flowField(np.ndarray):
             ySpace (='cheb'): If 'cheb', keep data on Chebyshev grid
                                 If 'linear', interpolate to uniformly spaced points
             doSort (=True):  If True, call self.sortWavenumbers()
-            **kwargs: accept keys 'L' and 'M' to use for padding
-                    sends **kwargs directly to _spec2physIfft() directly to avoid issues with L and M in the current function
+            ifft (=True): Use ifft or simple exponentiation to compute physical field
+            **kwargs: accept keys 'L', 'M', 'nx', and 'nz' to use for padding
         Outputs:
             outDict with keyds
                 arrPhys:    Physical field for arr
@@ -726,61 +964,92 @@ class flowField(np.ndarray):
         else : 
             assert (arr.shape == (self.aArr.size, self.bArr.size,self.N)) or \
                 (arr.shape == (self.aArr.size, self.bArr.size,1,self.N))
-            warn("Ensure input arr confirms to fft order for wavenumbers")
+            if ifft:
+                warn("Ensure input arr confirms to fft order for wavenumbers")
+        if doSort:
+            self.sortWavenumbers()
 
-       
-        #===============================================================
-        # Ensure fft order for self.aArr and self.bArr 
-        #================================
-        # x-Modes go 0,1,..,L-1,L,-L+1,-L+2,..,-1, a total of 2*L
-        # z-Modes go 0,1,..,M-1,M, a total of M+1
-        L0 = self.aArr.size//2; M0 = self.bArr.size-1 
-        if ('L' not in kwargs) or (kwargs['L'] is None): L = L0
-        else : L = kwargs['L']
-        if ('M' not in kwargs) or (kwargs['M'] is None): M = M0
-        else : M = kwargs['M']
-        #pdb.set_trace()
         # fundamental wavenumbers to define periodic domain
         a0 = np.amin( self.aArr[ np.where(self.aArr > 0.)[0]] )   # Smallest positive wavenumber
         b0 = np.amin( self.bArr[ np.where(self.bArr > 0.)[0]] )   # Smallest positive wavenumber
-
-        # Ensure aArr and bArr are integral multiples
-        aArrIdeal = a0 * np.fft.ifftshift( np.arange(-L0, L0) )   # -L is included, but L isn't. 
-        bArrIdeal = b0 * np.arange(0,M0+1)
-        if not ( np.linalg.norm(self.aArr- aArrIdeal) < 1.e-09*a0 ) :
-            print("aArr doesn't seem to be integral multiples. Have a look")
-            print("a0 is", a0)
-            print("aArr/a0 is ", self.aArr/a0)
-        if not ( np.linalg.norm(self.bArr- bArrIdeal) < 1.e-09*b0 ) :
-            print("bArr doesn't seem to be integral multiples. Have a look")
-            print("b0 is", b0)
-            print("bArr/b0 is ", self.bArr/b0)
-
-        #=================================================================
-        # Define basic xArr, yArr, and zArr
-        #=============================
-        # Grids in x, z, and y
-        # Worry about x0, x1, z0, z1 after the iFFT
-        # Note that I have a different L and L0 if I'm trying to use padding
-        # For the checks above, use L0, M0 since arr and self are defined for L0, M0
-        # L and M come into play in _spec2physIfft(), so I must build xArr and zArr to reflect these
-        # Of course, if L==L0 and M==M0, there's nothing to worry about
-        nx = 2*L; nz = 2*M
         Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
-        xArr = np.linspace(0., Lx, nx+1)[:-1]
-        zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
+        
+        if 'nx' in kwargs: nx = kwargs.pop('nx')
+        elif 'L' in kwargs: nx = 2*kwargs.pop('L')
+        else : nx = self.aArr.size
+        nx = np.int(nx - nx%2)
 
-        interpFlag = True
-        if N is not None :
-            if ySpace == 'linear':
-                yArr = np.linspace(1., -1., N+2)[1:-1]
-            else : yArr = pseudo.chebdif(N,1)[0]
+        if 'nz' in kwargs: nz = kwargs.pop('nz')
+        elif 'M' in kwargs: nz = 2*kwargs.pop('M')
+        else : nz = 2*(self.bArr.size-1)
+        nz = np.int(nz - nz%2)
+        aArr = self.aArr; bArr = self.bArr
+        if ifft :  
+            # Use this when aArr.size and bArr.size are large
+            if (aArr.size < 20) or (bArr.size < 10):
+                warn("aArr.size and bArr.size are %d, %d. ifft is unlikely to produce a 'good' physical field. Set ifft=False in toPhysical()."%(aArr.size,bArr.size))
+            #===============================================================
+            # Ensure fft order for self.aArr and self.bArr 
+            #================================
+            # x-Modes go 0,1,..,L-1,L,-L+1,-L+2,..,-1, a total of 2*L
+            # z-Modes go 0,1,..,M-1,M, a total of M+1
+            L0 = self.aArr.size//2; M0 = self.bArr.size-1 
+            L = nx//2;  M = nz//2
+
+
+            #pdb.set_trace()
+
+            # Ensure aArr and bArr are integral multiples
+            aArrIdeal = a0 * np.fft.ifftshift( np.arange(-L0, L0) )   # -L is included, but L isn't. 
+            bArrIdeal = b0 * np.arange(0,M0+1)
+            if not ( np.linalg.norm(self.aArr- aArrIdeal) < 1.e-09*a0 ) :
+                print("aArr doesn't seem to be integral multiples. Have a look")
+                print("a0 is", a0)
+                print("aArr/a0 is ", self.aArr/a0)
+            if not ( np.linalg.norm(self.bArr- bArrIdeal) < 1.e-09*b0 ) :
+                print("bArr doesn't seem to be integral multiples. Have a look")
+                print("b0 is", b0)
+                print("bArr/b0 is ", self.bArr/b0)
+
+            #=================================================================
+            # Define basic xArr, yArr, and zArr
+            #=============================
+            # Grids in x, z, and y
+            # Worry about x0, x1, z0, z1 after the iFFT
+            # Note that I have a different L and L0 if I'm trying to use padding
+            # For the checks above, use L0, M0 since arr and self are defined for L0, M0
+            # L and M come into play in _spec2physIfft(), so I must build xArr and zArr to reflect these
+            # Of course, if L==L0 and M==M0, there's nothing to worry about
+            xArr = np.linspace(0., Lx, nx+1)[:-1]
+            zArr = np.linspace(-Lz/2., Lz/2., nz+1)[:-1]
+
+            if L== L0 : Lifft = None
+            else : Lifft = L
+            if M== M0 : Mifft = None
+            else : Mifft = M
+            #==================
+            # Get physical field
+            #====
+            arrPhysUnfolded = _spec2physIfft( arr, L=Lifft, M=Mifft)
+
         else :
-            if ySpace == 'linear':
-                yArr = np.linspace(1., -1., self.N+2)[1:-1]
-            else :
-                yArr = self.y.copy()
-                interpFlag = False
+            # Use this when aArr.size and bArr.size are small
+            if (self.aArr.size > 40) and (self.bArr.size > 20):
+                warn("aArr.size and bArr.size are %d, %d. Use ifft to improve speed by setting ifft=True in toPhysical()"%(self.aArr.size,self.bArr.size))
+            #==================
+            # Get physical field
+            #======
+
+            physDict = _spec2physManual(arr, self.aArr, self.bArr,
+                    nx = nx, nz = nz)
+            xArr = physDict['xArr']; zArr = physDict['zArr']
+            arrPhysUnfolded = physDict['arrPhys']
+
+        if (x0 is None ) and (lx is None) and (z0 is None) \
+                and (ySpace == 'cheb'):
+            #print("Returning without the index truncation")
+            return {'arrPhys':arrPhysUnfolded,'xArr':xArr.flatten(), 'zArr':zArr.flatten(), 'yArr':self.y.copy()}
+        
         
         #=================================================================
         # z0ind and z1ind
@@ -798,6 +1067,12 @@ class flowField(np.ndarray):
             # Index of (second) smallest entry of zArr >= z0
         except :
             z1ind = zArr.size - 1
+        
+
+        # Slice in  z  
+        arrPhysUnfolded = arrPhysUnfolded[:, z0ind:z1ind]
+        zArr = zArr[z0ind:z1ind]
+        nz1 = zArr.size
 
         #==================================
         # Get x0ind:
@@ -852,15 +1127,6 @@ class flowField(np.ndarray):
             # A bit of effort should let me handle this properly, but I can't be bothered
 
        
-        #==============================================================
-        # Get physical field, and re-order according to x0ind and x1ind 
-        #===============
-
-        # Treatment in z is quite straight-forward, so go with 
-        arrPhysUnfolded = _spec2physIfft( arr, **kwargs)[:, z0ind:z1ind]
-        zArr = zArr[z0ind:z1ind]
-        nz1 = zArr.size
-
         # I should be able to do the following with just 2 cases instead of 3, 
         #   too lazy for that now... 
         if not (foldInX or foldInX_x1) : 
@@ -883,10 +1149,22 @@ class flowField(np.ndarray):
 
 
         #==============================================================
-        # Divide by size of array, interpolate if needed
+        # Divide by size of array if ifft was used, interpolate in y if needed
         #======================
+        if ifft : arrPhys *= (1./(2.*np.pi)**2) * (a0*b0)
 
-        arrPhys *= (1./(2.*np.pi)**2) * (a0*b0)
+        interpFlag = True
+        if N is not None :
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., N+2)[1:-1]
+            else : yArr = pseudo.chebdif(N,1)[0]
+        else :
+            if ySpace == 'linear':
+                yArr = np.linspace(1., -1., self.N+2)[1:-1]
+            else :
+                yArr = self.y.copy()
+                interpFlag = False
+
         if interpFlag:
             for i0 in range(nx1):
                 for i1 in range(nz1):
@@ -974,7 +1252,9 @@ class flowField(np.ndarray):
                 swirl, xArr, yArr, zArr
         """
         if doSort: self.sortWavenumbers()
-        else : warn("We're now assuming wavenumbers are in fft order...")
+        else : 
+            if kwargs.get('ifft',True):
+                warn("We're now assuming wavenumbers are in fft order...")
         
         tmpArr = self.ddx()
         ux = tmpArr[:,:,0]
@@ -1014,7 +1294,7 @@ class flowField(np.ndarray):
         
         return {'swirl':swirlStrength, 'xArr':xArr, 'yArr':yArr, 'zArr':zArr} 
 
-    def savePhysical(self, fieldList=['u'], fName=None,fPrefix=None,forcing='Fz', **kwargs):
+    def savePhysical(self, fieldList=['u'], fName=None,fPrefix=None,fsAmp=None, **kwargs):
         """ 
         Save physical fields to .mat files
         Inputs:
@@ -1033,7 +1313,14 @@ class flowField(np.ndarray):
             if fPrefix is None : 
                 fName = 'testPhysFields.mat'
             else :
-                fName = fPrefix + '_%s_t%05d.mat'%(forcing, round(100*self.flowDict['t']))
+                if fsAmp is None : 
+                    fsAmp = np.array([1., 0., 0.])
+                    warn("fsAmp not supplied to savePhysical; assuming [1,0,0]")
+                else :
+                    fsAmp = np.array([fsAmp]).flatten()
+                    fsAmp = fsAmp/np.amin( np.abs(fsAmp[np.nonzero(fsAmp)]) )
+                fName = fPrefix + '_Fs_%d_%d_%d_t%05d.mat'%(
+                        fsAmp[0],fsAmp[1],fsAmp[2], round(100*self.flowDict['t']))
 
         if not fName.endswith('.mat'): fName = fName.split('.')[0] + '.mat'
 
@@ -1071,7 +1358,9 @@ class flowField(np.ndarray):
                 saveDict.update({'vorz':physDict['arrPhys']} )
                 savedList.append('vorz')
         
-        a0 = self.aArr[1]; b0 = self.bArr[1]; Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        a0 = np.amin( np.abs( self.aArr[ np.nonzero(self.aArr)] ))
+        b0 = np.amin( np.abs( self.bArr[ np.nonzero(self.bArr)] ))
+        Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
         turbInt = (2./Lx/Lz)* np.sum( np.sum( self.conj() * self, axis=1), axis = 0 ) 
         uvInt = (2./Lx/Lz)* np.sum( np.sum( self[:,:,0].conj() * self[:,:,1], axis=1), axis = 0 ).reshape((1,self.N))
         turbInt = np.concatenate(( turbInt, uvInt), axis=0)
@@ -1089,7 +1378,91 @@ class flowField(np.ndarray):
         
         return
 
+    def streakHeight(self, threshold=0.25, lowerHalf=True, bisect=False, **kwargs):
+        """ Height of streamwise velocity streak, defined as distance from wall of isosurface
+            Inputs:
+                (keyword)
+                threshold (=0.25): Fraction of uMax that defines the isosurface
+                lowerHalf (=True): If True, compute height for y in [-1,0], 
+                                    if False, compute for y in [0,1]
+                bisect (=False)  : If True, interpolate and use bisection to improve accuracy
+                kwargs: Passed to self.toPhysical()
+        """
+        uDict = self.toPhysical(arr=self[:,:,0], **kwargs)
+        uPhys = uDict['arrPhys']
+        N = self.N
+        
+        # Max over x and z, considering absolute values
+        uMax_xz = np.amax( np.amax( np.abs(uPhys), axis=1), axis=0)
+        if lowerHalf :
+            uMax_xz = uMax_xz[N//2:][::-1] # y goes from 1 to -1; now considering [-1,0]
+            yTmp = self.y[N//2:][::-1]; yWall = -1.
+            # Now, uMax_xz and yTmp go from wall to core
+        else :
+            uMax_xz = uMax_xz[:N//2]
+            yTmp = self.y[:N//2]; yWall = 1.
+            # uMax_xz and yTmp go from wall to core already
 
+        if bisect:
+            warn("Bisection isn't presently implemented. Do it later if needed")
+        
+        # Normalize uMax_xz
+        uMax_xz = uMax_xz/np.amax(uMax_xz)
+        # Define streak height as smallest (or largest if lowerHalf=False) y where 
+        #    uMax_xz > threshold
+        if (threshold >= 1.) or (threshold <= 0.):
+            threshold = 0.25
+            warn("threshold should be in (0,1); resetting to 0.25")
+
+        yInd = np.amax( np.where( uMax_xz > threshold )[0].flatten() )
+        # Largest index where (normalized) uMax_xz is above the threshold
+
+        strHeight = np.abs( yWall - yTmp[yInd] )
+        return strHeight
+
+
+    def ReynoldsStresses(self):
+        """ Return a dict containing Reynolds stresses (averaged in streamwise-spanwise)"""
+        a0 = np.amin( np.abs( self.aArr[ np.nonzero(self.aArr)] ))
+        b0 = np.amin( np.abs( self.bArr[ np.nonzero(self.bArr)] ))
+        Lx = 2.*np.pi/a0; Lz = 2.*np.pi/b0
+        turbInt = np.real((2./Lx/Lz)* np.sum( np.sum( self.conj() * self, axis=1), axis = 0 ) )
+        uvInt = np.real((2./Lx/Lz)* np.sum( np.sum( self[:,:,0].conj() * self[:,:,1], axis=1), axis = 0 ))
+        uwInt = np.real((2./Lx/Lz)* np.sum( np.sum( self[:,:,0].conj() * self[:,:,2], axis=1), axis = 0 ))
+        vwInt = np.real((2./Lx/Lz)* np.sum( np.sum( self[:,:,1].conj() * self[:,:,2], axis=1), axis = 0 ))
+
+        stressDict = {'uu':turbInt[0], 'vv':turbInt[1], 'ww':turbInt[2], 'uv':uvInt, 'uw':uwInt, 'vw':vwInt}
+        return stressDict
+
+    def eddyInt(self,lowerHalf=True):
+        """ Return eddy intensity functions (normalized Reynolds stresses)"""
+        stressDict = self.ReynoldsStresses()
+        if (self.aArr.size < 30) or (self.bArr.size < 15):
+            strHeight = self.streakHeight(ifft=False, nx=50,nz=50,lowerHalf=lowerHalf)
+        else :
+            strHeight = self.streakHeight(ifft=True, lowerHalf=lowerHalf)
+
+        # Scale y by strHeight
+        N = self.N
+        if lowerHalf:
+            i0 = N-1; i1 = N//2; iStep=-1; yWall = -1.
+        else :
+            i0 = 0; i1 = N//2; iStep = 1; yWall = 1.
+        yArr = np.abs(self.y[i0:i1:iStep]-yWall)/strHeight
+        # Scale intensities by uv
+        uv = stressDict['uv']; uvAbsMax = np.amax(np.abs(uv))
+        uv = (uv/uvAbsMax)[i0:i1:iStep]
+        uu = (stressDict['uu']/uvAbsMax)[i0:i1:iStep]
+        vv = (stressDict['vv']/uvAbsMax)[i0:i1:iStep]
+        ww = (stressDict['ww']/uvAbsMax)[i0:i1:iStep]
+        uw = (stressDict['uw']/uvAbsMax)[i0:i1:iStep]
+        vw = (stressDict['vw']/uvAbsMax)[i0:i1:iStep]
+        
+        warn("eddyInt defined for half-channel, according to kwargs 'lowerHalf'(=True)")
+        warn("Normalized height for eddyInt is returned as eddyIntDict['yArr']")
+        
+        eddyIntDict = {'uu':uu,'vv':vv,'ww':ww,'uv':uv,'uw':uw,'vw':vw,'yArr':yArr}
+        return eddyIntDict
 
     def zero(self):
         """Returns an object of the same class and shape as self, but with zeros as entries"""
@@ -1239,6 +1612,53 @@ def _spec2physIfft(arr0, L=None, M=None):
     physField = np.concatenate(  (physField[:, nz//2:], physField[:, :nz//2]), axis=1)
     return physField
 
+def _spec2physManual(arr0, aArr, bArr, xArr=None, zArr=None,nx=None, nz=None):
+    """
+       Inputs:
+        (Positional) 
+        arr0: Array of shape (l1, m1, N)  of spectral coefficients 
+        aArr: Array of streamwise wavenumbers of size l1
+        bArr: Array of spanwise wavenumbers of size m1
+        (Keyword)
+        xArr (=None): Streamwise locations. Use a0 from aArr and nx if not supplied
+        zArr (=NOne): Spanwise locations. Use b0 from bArr and nz if not supplied
+        nx (=None): Size of xArr if xArr is not supplied. If not supplied, use aArr.size
+        nz (=None): Size of zArr if zArr is not supplied. If not supplied, use 2*(bArr.size-1)
+    """
+    bArr = bArr[ bArr >= 0.]   # Real-valuedness for b<0
+    if xArr is None : 
+        a0 = np.amin(np.abs(  aArr[np.nonzero(aArr)] ))
+        if (nx is None) or not isinstance(nx, (int, np.integer)) : 
+            nx = aArr.size
+        xArr = np.linspace(0., 2.*np.pi/a0, num=nx, endpoint=False)
+    xArr = xArr.reshape((xArr.size, 1,1)) 
+    aArrIdeal = a0*np.arange(-(aArr.size//2), aArr.size//2)
+    if not _areSame(np.sort(aArr), aArrIdeal):
+        warn("aArr in _spec2physManual is not of form a0*{-L,..,L-1}")
+
+    if zArr is None : 
+        b0 = np.amin(np.abs(  bArr[np.nonzero(bArr)] ))
+        if (nz is None) or not isinstance(nz, (int, np.integer)) : 
+            nz = 2*(bArr.size-1)
+        zArr = np.linspace(-np.pi/b0, np.pi/b0, num=nz, endpoint=False)
+    zArr = zArr.reshape((1,zArr.size,1))
+
+    N = arr0.shape[-1]
+    assert arr0.ndim == 3
+
+    arrPhys = np.zeros((xArr.size, zArr.size, N))
+    for i0 in range(aArr.size):
+        a = aArr[i0]
+        for i1 in range(bArr.size):
+            b = bArr[i1]
+            if (b==0.) and (a >= 0.) : continue
+            # Get these from coeffs for  (-|a|,0), instead of (|a|,0)
+
+            arrPhys += 2.*np.real( arr0[i0,i1]* np.exp(1.j*(a*xArr + b*zArr) ) ) 
+
+    return {'arrPhys':arrPhys, 'xArr':xArr.flatten(), 'zArr':zArr.flatten()}
+
+
 def _velGrad2swirl(velGrad):
     """ Get swirl field from a (physical) velocity gradient tensor field
     Inputs:
@@ -1298,3 +1718,85 @@ def _velGrad2swirl(velGrad):
     return swirl
 
 
+
+def _modeSymms(mode1, mode2, N=None):
+    """ Take singular modes with the same singular value and return linear combination that satisfies a symmetry
+    Inputs:
+        (positional)
+        mode1 : Singular mode
+        mode2 : Singular mode
+        (keyword)
+        N (=None): If supplied, reshape array as (size//N, N) and then look for symms
+                    'symm', 'anti', 'bottom', and 'top'
+                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
+                    'bottom' is zero for y>0, and 'top' is zero for y<0
+    Outputs:
+        modeDict with 4 modes that satisfy the symmetry 4 different symmetries
+                    'symm', 'anti', 'bottom', and 'top'
+                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
+                    'bottom' is zero for y>0, and 'top' is zero for y<0
+                along with associated errors (pseudo.chebnorm)
+    """
+    assert mode1.size == mode2.size
+    if mode1.ndim > 1 : N = mode1.shape[-1]
+    if N is None : 
+        mode1 = mode1.reshape((1, mode1.size))
+        mode2 = mode2.reshape((1, mode2.size))
+        N = mode1.size
+    else :
+        mode1 = mode1.reshape((mode1.size//N, N))
+        mode2 = mode2.reshape((mode2.size//N, N))
+     
+    #=====================================
+    # Symmetric and anti-symmetric modes
+    #=====================
+    # First, compute symmetric (u_s) and anti-symmetric (u_as) modes as linear combination
+    #   of the arguments u1 and u2
+    # u_s = a*u1 + a*b*u2, u_as = c*u1 + c*d*u2, such that
+    # u_s(-y) = u_s(y)      and         u_as(-y) = -u_as(y),    for all y
+    # Assuming these modes exist, they are obtained when b and d are
+    # b = - (u1(-y)-u1(y))/(u2(-y)-u2(y))
+    # d = - (u1(-y)+u1(y))/(u2(-y)-u2(y)); for a and c to ensure unit norm
+    # Then, the bottom (u_b) and top (u_t) modes are computed as
+    # u_s +/- u_as; one producing u_b and the other u_t
+    
+    diff1 = mode1[0,::-1] - mode1[0]; sum1 = mode1[0,::-1] + mode1[0]
+    diff2 = mode2[0,::-1] - mode2[0]; sum2 = mode2[0,::-1] + mode2[0]
+    # Use only the first component (streamwise velocity)
+
+    bArr = - diff1[np.nonzero(diff2)]/diff2[np.nonzero(diff2)]
+    dArr = -  sum1[np.nonzero(diff2)]/ sum2[np.nonzero(diff2)]
+    # Set a and c to 1, and use mean of bArr and dArr, to produce u_s and u_as as
+    modeSymm = mode1 + np.mean(bArr)*mode2
+    modeAnti = mode1 + np.mean(dArr)*mode2
+    # Normalize, 
+    modeSymm = modeSymm/pseudo.chebnorm(modeSymm,N)
+    modeAnti = modeAnti/pseudo.chebnorm(modeAnti,N)
+    # Multiply by a phase so that u(y=y_max) is real
+    indMaxSymm = np.argmax(np.abs(modeSymm[0])); indMaxAnti = np.argmax(np.abs(modeAnti[0]))
+    phaseSymm=np.angle(modeSymm[0,indMaxSymm]); phaseAnti=np.angle(modeAnti[0,indMaxAnti])
+    modeSymm = modeSymm*np.exp(-1.j*phaseSymm)
+    modeAnti = modeAnti*np.exp(-1.j*phaseAnti)
+
+    # Ideally, mean(bArr) and mean(dArr) must be equal to each of their entries. 
+    # This usually doesn't happen because svd is rarely calculated to machine accuracy
+    # Quantify the error using pseudo.chebnorm
+    symmErr = pseudo.chebnorm(modeSymm[0] - modeSymm[0,::-1], N) 
+    antiErr = pseudo.chebnorm(modeAnti[0] + modeAnti[0,::-1], N) 
+    
+    # Finally, compute u_b and u_t
+    modeDiff = modeSymm - modeAnti ; modeSum = modeSymm + modeAnti
+    # modeDiff could be modeBottom or modeTop; to know which, compute norm in both halves
+    topNorm = np.linalg.norm(modeDiff[0,:N//2].flatten())
+    bottomNorm = np.linalg.norm(modeDiff[0,N//2 :].flatten())
+    if topNorm <= bottomNorm:
+        # Then modeDiff is modeBottom (it's almost zero in the top-half)
+        modeBottom = modeDiff/2.
+        modeTop = modeSum/2.
+    else :
+        modeBottom = modeSum/2.
+        modeTop = modeDiff/2.
+
+    modeDict = {'symm':modeSymm,'anti':modeAnti,'bottom':modeBottom,'top':modeTop,\
+            'err':0.5*(symmErr+antiErr)}
+    return modeDict

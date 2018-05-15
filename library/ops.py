@@ -414,6 +414,67 @@ class linearize(object):
 
         return matrixNorm
     
+    def getResolventModes(self, a, b, omega, nSvals= 10,sparse=True,**kwargs):
+        """ 
+        Returns the resolvent modes, singular values, and forcing modes at a specified Fourier mode (spatial) and phase speed 
+        Inputs: 
+        Positional:
+            a :     Streamwise wavenumber
+            b :     Spanwise wavenumber
+            omega :    frequencey
+        Keyword:
+            nSvals (=10): Number of modes/singular values returned
+            sparse (=True): If set to False, then svds is not used
+            **kwargs: passed to self.makeSystem()
+
+        Outputs:
+            dictionary with keys
+                velocityModes: 2d array whose columns are resolvent modes
+                svals:  Singular values (1d array)
+                responseModes: 2d array whose columns are forcing modes
+        """
+        systemDict = self.makeSystem(a=a, b=b,**kwargs)
+        A = systemDict['A']; C = systemDict['C']; B = systemDict['B']
+        I2 = np.identity(2*self.N, dtype=np.complex)
+
+        nSvals = min( [nSvals, 2*self.N]) 
+        res = -(1.j*omega*I2 + A) ; resInv = np.linalg.solve(res,I2)
+        H = C @ resInv @ B
+
+        W3s = self.weightDict['W3Sqrt']
+        W3si= self.weightDict['W3SqrtInv']
+
+        # The SVD must use kinetic energy as the norm to rank singular vectors by
+        # Since we use Chebyshev nodes for discretization (which are not uniformly spaced), 
+        #   all vectors must be weighted by some appropriate matrices 
+        Hw = W3s @ H @ W3si
+        if sparse and (nSvals < np.sqrt(2*self.N)):
+            #warn("svds isn't necessarily cheap since the resolvent inverse is dense.")
+            #warn("Using dense svd (np.linalg.svd) irrespective of arguments")
+            #if False :
+            try :
+                # svds sometimes gets the wrong modes if too few modes requested
+                velModes, svals, forModesCC = svds(Hw, k =nSvals)
+                # if svds fails to converge for default settings
+            #else :
+            except :
+                velModes, svals, forModesCC = np.linalg.svd(Hw)
+        else :
+            velModes, svals, forModesCC = np.linalg.svd(Hw)
+
+        velocityModes = (W3si @ velModes).T
+        forcingModes = (W3s @ forModesCC.conj().T).T
+        # Verify accuracy of svd (HS norm of H without accounting for spacing):
+        Htmp = velocityModes.T @ np.diag(svals) @ forcingModes.conj()
+        svdErr = np.linalg.norm( H-Htmp,ord='fro')/np.linalg.norm(H,ord='fro')
+
+        if svdErr > (svals.size/(3*self.N))*1.e-2:
+            print("Relative Frobenius-norm error for SVD is %.3g for sparse=%s with nSvals=%d"%(svdErr,sparse,svals.size))
+        svals = svals[:nSvals]; velocityModes=velocityModes[:nSvals]
+        forcingModes = forcingModes[:nSvals]
+
+        warn("getResolventModes(): velocityModes, forcingModes are shape (n_smodes, 3N), so each ROW is a mode, not column")
+        return {'velocityModes':velocityModes, 'svals': svals, 'forcingModes':forcingModes} 
 
    
 
