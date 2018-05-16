@@ -29,6 +29,89 @@ import h5py
 from scipy.integrate import quad
 assert sys.version_info >=(3,5), "The infix operator used for matrix multiplication isn't supported in versions earlier than python3.5. Install 3.5 or fix this code (replace A@B with np.dot(A,B) )"
 
+
+def _modeSymms(mode1, mode2, N=None):
+    """ Take singular modes with the same singular value and return linear combination that satisfies a symmetry
+    Inputs:
+        (positional)
+        mode1 : Singular mode
+        mode2 : Singular mode
+        (keyword)
+        N (=None): If supplied, reshape array as (size//N, N) and then look for symms
+                    'symm', 'anti', 'bottom', and 'top'
+                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
+                    'bottom' is zero for y>0, and 'top' is zero for y<0
+    Outputs:
+        modeDict with 4 modes that satisfy the symmetry 4 different symmetries
+                    'symm', 'anti', 'bottom', and 'top'
+                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
+                    'bottom' is zero for y>0, and 'top' is zero for y<0
+                along with associated errors (pseudo.chebnorm)
+    """
+    assert mode1.size == mode2.size
+    if mode1.ndim > 1 : N = mode1.shape[-1]
+    if N is None : 
+        mode1 = mode1.reshape((1, mode1.size))
+        mode2 = mode2.reshape((1, mode2.size))
+        N = mode1.size
+    else :
+        mode1 = mode1.reshape((mode1.size//N, N))
+        mode2 = mode2.reshape((mode2.size//N, N))
+     
+    #=====================================
+    # Symmetric and anti-symmetric modes
+    #=====================
+    # First, compute symmetric (u_s) and anti-symmetric (u_as) modes as linear combination
+    #   of the arguments u1 and u2
+    # u_s = a*u1 + a*b*u2, u_as = c*u1 + c*d*u2, such that
+    # u_s(-y) = u_s(y)      and         u_as(-y) = -u_as(y),    for all y
+    # Assuming these modes exist, they are obtained when b and d are
+    # b = - (u1(-y)-u1(y))/(u2(-y)-u2(y))
+    # d = - (u1(-y)+u1(y))/(u2(-y)-u2(y)); for a and c to ensure unit norm
+    # Then, the bottom (u_b) and top (u_t) modes are computed as
+    # u_s +/- u_as; one producing u_b and the other u_t
+    
+    diff1 = mode1[0,::-1] - mode1[0]; sum1 = mode1[0,::-1] + mode1[0]
+    diff2 = mode2[0,::-1] - mode2[0]; sum2 = mode2[0,::-1] + mode2[0]
+    # Use only the first component (streamwise velocity)
+
+    bArr = - diff1[np.nonzero(diff2)]/diff2[np.nonzero(diff2)]
+    dArr = -  sum1[np.nonzero(diff2)]/ sum2[np.nonzero(diff2)]
+    # Set a and c to 1, and use mean of bArr and dArr, to produce u_s and u_as as
+    modeSymm = mode1 + np.mean(bArr)*mode2
+    modeAnti = mode1 + np.mean(dArr)*mode2
+    # Normalize, 
+    modeSymm = modeSymm/pseudo.chebnorm(modeSymm,N)
+    modeAnti = modeAnti/pseudo.chebnorm(modeAnti,N)
+    # Multiply by a phase so that u(y=y_max) is real
+    indMaxSymm = np.argmax(np.abs(modeSymm[0])); indMaxAnti = np.argmax(np.abs(modeAnti[0]))
+    phaseSymm=np.angle(modeSymm[0,indMaxSymm]); phaseAnti=np.angle(modeAnti[0,indMaxAnti])
+    modeSymm = modeSymm*np.exp(-1.j*phaseSymm)
+    modeAnti = modeAnti*np.exp(-1.j*phaseAnti)
+
+    # Ideally, mean(bArr) and mean(dArr) must be equal to each of their entries. 
+    # This usually doesn't happen because svd is rarely calculated to machine accuracy
+    # Quantify the error using pseudo.chebnorm
+    symmErr = pseudo.chebnorm(modeSymm[0] - modeSymm[0,::-1], N) 
+    antiErr = pseudo.chebnorm(modeAnti[0] + modeAnti[0,::-1], N) 
+    
+    # Finally, compute u_b and u_t
+    modeDiff = modeSymm - modeAnti ; modeSum = modeSymm + modeAnti
+    # modeDiff could be modeBottom or modeTop; to know which, compute norm in both halves
+    topNorm = np.linalg.norm(modeDiff[0,:N//2].flatten())
+    bottomNorm = np.linalg.norm(modeDiff[0,N//2 :].flatten())
+    if topNorm <= bottomNorm:
+        # Then modeDiff is modeBottom (it's almost zero in the top-half)
+        modeBottom = modeDiff/2.
+        modeTop = modeSum/2.
+    else :
+        modeBottom = modeSum/2.
+        modeTop = modeDiff/2.
+
+    modeDict = {'symm':modeSymm,'anti':modeAnti,'bottom':modeBottom,'top':modeTop,\
+            'err':0.5*(symmErr+antiErr)}
+    return modeDict
+
 class linearize(object):
     def __init__(self, N=151, U=None,dU=None, d2U=None,flowClass="channel",Re=2000., **kwargs):
         """
