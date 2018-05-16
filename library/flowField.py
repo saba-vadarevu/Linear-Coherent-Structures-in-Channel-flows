@@ -352,7 +352,7 @@ def impulseResponse(aArr, bArr,N, tArr, fsAmp=None, flowDict=defaultDict, impuls
 
 def resolventMode(a,b,omegaArr,N,Re,
         turb=True,eddy=False,flowClass='channel',
-        tArr=None,phaseArr=None,modeNumber=1,
+        tArr=None,phaseArr=None,ampArr=None, modeNumber=1,
         modeSymm=2, symmLegend=['symm','anti','bottom','top']):
     """ Return flowField instance corresponding to (a,b)
         Inputs:
@@ -369,6 +369,7 @@ def resolventMode(a,b,omegaArr,N,Re,
             flowClass (='channel')
             tArr (=None): Set of times (just 0 by default)
             phaseArr (=None): Phases for different omega-modes, 0 by default
+            ampArr (=None): Amplitudes for different omega-modes, 1 by default
             modeNumber (=1): Can be float or np.ndarray (of size omegaArr.size) 
                             Allows probing resolvent modes that aren't the first
             symmLegend (=..): List containing strings that specify symmetries:
@@ -390,6 +391,11 @@ def resolventMode(a,b,omegaArr,N,Re,
     #=========================================
     # Simple pre-processing
     #====================
+    if (ampArr is not None) or (phaseArr is not None) or isinstance(modeNumber, (list,np.ndarray)) \
+            or isinstance(modeSymm, (list,np.ndarray)):
+        warn("Code needs more testing to run for more than a single Fourier mode at t=0")
+
+
     omegaArr = np.array([omegaArr]).flatten()
     if (a== 0.) or (b==0.): print("The code isn't meant for cases with either a or b being 0...")
     aArr = np.array([0.,abs(a),-2*abs(a),-abs(a)]) 
@@ -402,7 +408,7 @@ def resolventMode(a,b,omegaArr,N,Re,
     if turb: flowState='turb'
     else : flowState='lam'
     
-    pdb.set_trace()
+    #pdb.set_trace()
     # modeNumber prescribes the resolvent mode number to choose for each omega
     modeNumber = np.array([modeNumber]).flatten()
     if modeNumber.size==omegaArr.size:
@@ -439,6 +445,19 @@ def resolventMode(a,b,omegaArr,N,Re,
             warn("phaseArr.size is neither omegaArr.size nor 2*omegaArr.size")
             phaseArr = np.zeros((2,omegaArr.size))
     else : phaseArr = np.zeros((2,omegaArr.size))
+    
+    #========================================
+    # Default amplitude: 1
+    #===================
+    if ampArr is not None :
+        if ampArr.size == 2*omegaArr.size : 
+            ampArr = ampArr.reshape((2,omegaArr.size))
+        elif ampArr.size == omegaArr.size:
+            ampArr = np.concatenate((ampArr.flatten(),ampArr.flatten())).reshape((2,omegaArr.size))
+        else :
+            warn("ampArr.size is neither omegaArr.size nor 2*omegaArr.size")
+            ampArr = np.ones((2,omegaArr.size))
+    else : ampArr = np.ones((2,omegaArr.size))
 
     #================================
     # Reflectional symmetry and assigning coeffs for 4 related Fourier modes:
@@ -461,6 +480,8 @@ def resolventMode(a,b,omegaArr,N,Re,
     # For w, swapping the sign of 'b' makes the coefficient negative, 
     #   while swapping the sign of 'a' makes it complex conjugate and negative
     #===========
+    if (omegaArr.size > 1) or (tArr.size > 1):
+        warn("Code needs more testing to run for more than a single Fourier mode at t=0")
 
     #==========================================
     # Get resolvent modes for mode (+a, +b) for each omega; see later for (-a,+b)
@@ -493,7 +514,7 @@ def resolventMode(a,b,omegaArr,N,Re,
             # Apply symmetries to get the appropriate linear combination
             velMode1 = resDict['velocityModes'][nMode1-1].reshape((3,N))
             velMode2 = resDict['velocityModes'][nMode2-1].reshape((3,N))
-            modeDict = _modeSymms(velMode1,velMode2, N=N)
+            modeDict = ops._modeSymms(velMode1,velMode2, N=N)
             if modeDict['err'] > 1.e-6:
                 print("The symmetries don't seem to hold; err=%.3g"%modeDict['err'])
             velMode = modeDict[symmLegend[modeSymm[0,i2]]].flatten()
@@ -521,7 +542,7 @@ def resolventMode(a,b,omegaArr,N,Re,
         warn("For mode (-a,b), using reflexive symmetry about z=0 plane:")
         warn("[u,v,w](x,y,-z) = [u,v,-w](x,y,z)")
         warn("Applied as u_{a,b}=u_{a,-b}=conj(u_{-a,b})=conj(u_{-a,-b})")
-        warn("This symmetry can be broken (shifted) by setting unequal phases for left and right leaning waves")
+        warn("This symmetry can be broken (shifted) by setting unequal phases or amplitudes for left and right leaning waves")
         #"""
     
 
@@ -531,7 +552,14 @@ def resolventMode(a,b,omegaArr,N,Re,
     expPhaseArrLong = np.ones((4,2,omegaArr.size,1),dtype=np.complex)   # Remember, aArr.size=4, bArr.size=2
     expPhaseArrLong[ 1,1,:,0] = np.exp(1.j*phaseArr[0])# (a,b) 
     expPhaseArrLong[-1,1,:,0] = np.exp(1.j*phaseArr[1])# (-a,b)
-    modeArr = modeArr*expPhaseArrLong
+    #=========================
+    # Amplitudes
+    #===========
+    ampArrLong = np.ones((4,2,omegaArr.size,1),dtype=np.complex)   # Remember, aArr.size=4, bArr.size=2
+    ampArrLong[ 1,1,:,0] = ampArr[0]# (a,b) 
+    ampArrLong[-1,1,:,0] = ampArr[1]# (-a,b)
+    
+    modeArr = modeArr*expPhaseArrLong*ampArrLong
 
     if tArr is None : tArr = np.array([0.])
     else : tArr = np.array([tArr]).flatten()
@@ -570,21 +598,6 @@ def resolventMode(a,b,omegaArr,N,Re,
 
 
 
-def resolventField(aArr, bArr, omegaArr, N, Re, turb=True, eddy=False, 
-        modeArr=None, phaseArr=None, tArr=None):
-    """
-        Create flowField instance as collection of resolvent modes
-    """
-    if tArr is not None : 
-        warn("tArr is not supported yet.")
-    if phaseArr is not None :
-        warn("phaseArr is not supported yet. Phase difference set to 0.")
-    if modeArr is not None :
-        warn("modeArr is not supported yet. Using first resolvent mode only.")
-   
-    pass 
-
-    
 
 
 
@@ -1448,6 +1461,7 @@ class flowField(np.ndarray):
             i0 = N-1; i1 = N//2; iStep=-1; yWall = -1.
         else :
             i0 = 0; i1 = N//2; iStep = 1; yWall = 1.
+        i0 = 0; i1 = N; iStep=1
         yArr = np.abs(self.y[i0:i1:iStep]-yWall)/strHeight
         # Scale intensities by uv
         uv = stressDict['uv']; uvAbsMax = np.amax(np.abs(uv))
@@ -1458,10 +1472,10 @@ class flowField(np.ndarray):
         uw = (stressDict['uw']/uvAbsMax)[i0:i1:iStep]
         vw = (stressDict['vw']/uvAbsMax)[i0:i1:iStep]
         
-        warn("eddyInt defined for half-channel, according to kwargs 'lowerHalf'(=True)")
+        #warn("eddyInt defined for half-channel, according to kwargs 'lowerHalf'(=True)")
         warn("Normalized height for eddyInt is returned as eddyIntDict['yArr']")
         
-        eddyIntDict = {'uu':uu,'vv':vv,'ww':ww,'uv':uv,'uw':uw,'vw':vw,'yArr':yArr}
+        eddyIntDict = {'uu':uu,'vv':vv,'ww':ww,'uv':uv,'uw':uw,'vw':vw,'yArr':yArr,'dh':strHeight}
         return eddyIntDict
 
     def zero(self):
@@ -1719,84 +1733,3 @@ def _velGrad2swirl(velGrad):
 
 
 
-def _modeSymms(mode1, mode2, N=None):
-    """ Take singular modes with the same singular value and return linear combination that satisfies a symmetry
-    Inputs:
-        (positional)
-        mode1 : Singular mode
-        mode2 : Singular mode
-        (keyword)
-        N (=None): If supplied, reshape array as (size//N, N) and then look for symms
-                    'symm', 'anti', 'bottom', and 'top'
-                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
-                    'bottom' is zero for y>0, and 'top' is zero for y<0
-    Outputs:
-        modeDict with 4 modes that satisfy the symmetry 4 different symmetries
-                    'symm', 'anti', 'bottom', and 'top'
-                    'symm' is the symmetric mode (about y=0), 'anti' is anti-symmetric,
-                    'bottom' is zero for y>0, and 'top' is zero for y<0
-                along with associated errors (pseudo.chebnorm)
-    """
-    assert mode1.size == mode2.size
-    if mode1.ndim > 1 : N = mode1.shape[-1]
-    if N is None : 
-        mode1 = mode1.reshape((1, mode1.size))
-        mode2 = mode2.reshape((1, mode2.size))
-        N = mode1.size
-    else :
-        mode1 = mode1.reshape((mode1.size//N, N))
-        mode2 = mode2.reshape((mode2.size//N, N))
-     
-    #=====================================
-    # Symmetric and anti-symmetric modes
-    #=====================
-    # First, compute symmetric (u_s) and anti-symmetric (u_as) modes as linear combination
-    #   of the arguments u1 and u2
-    # u_s = a*u1 + a*b*u2, u_as = c*u1 + c*d*u2, such that
-    # u_s(-y) = u_s(y)      and         u_as(-y) = -u_as(y),    for all y
-    # Assuming these modes exist, they are obtained when b and d are
-    # b = - (u1(-y)-u1(y))/(u2(-y)-u2(y))
-    # d = - (u1(-y)+u1(y))/(u2(-y)-u2(y)); for a and c to ensure unit norm
-    # Then, the bottom (u_b) and top (u_t) modes are computed as
-    # u_s +/- u_as; one producing u_b and the other u_t
-    
-    diff1 = mode1[0,::-1] - mode1[0]; sum1 = mode1[0,::-1] + mode1[0]
-    diff2 = mode2[0,::-1] - mode2[0]; sum2 = mode2[0,::-1] + mode2[0]
-    # Use only the first component (streamwise velocity)
-
-    bArr = - diff1[np.nonzero(diff2)]/diff2[np.nonzero(diff2)]
-    dArr = -  sum1[np.nonzero(diff2)]/ sum2[np.nonzero(diff2)]
-    # Set a and c to 1, and use mean of bArr and dArr, to produce u_s and u_as as
-    modeSymm = mode1 + np.mean(bArr)*mode2
-    modeAnti = mode1 + np.mean(dArr)*mode2
-    # Normalize, 
-    modeSymm = modeSymm/pseudo.chebnorm(modeSymm,N)
-    modeAnti = modeAnti/pseudo.chebnorm(modeAnti,N)
-    # Multiply by a phase so that u(y=y_max) is real
-    indMaxSymm = np.argmax(np.abs(modeSymm[0])); indMaxAnti = np.argmax(np.abs(modeAnti[0]))
-    phaseSymm=np.angle(modeSymm[0,indMaxSymm]); phaseAnti=np.angle(modeAnti[0,indMaxAnti])
-    modeSymm = modeSymm*np.exp(-1.j*phaseSymm)
-    modeAnti = modeAnti*np.exp(-1.j*phaseAnti)
-
-    # Ideally, mean(bArr) and mean(dArr) must be equal to each of their entries. 
-    # This usually doesn't happen because svd is rarely calculated to machine accuracy
-    # Quantify the error using pseudo.chebnorm
-    symmErr = pseudo.chebnorm(modeSymm[0] - modeSymm[0,::-1], N) 
-    antiErr = pseudo.chebnorm(modeAnti[0] + modeAnti[0,::-1], N) 
-    
-    # Finally, compute u_b and u_t
-    modeDiff = modeSymm - modeAnti ; modeSum = modeSymm + modeAnti
-    # modeDiff could be modeBottom or modeTop; to know which, compute norm in both halves
-    topNorm = np.linalg.norm(modeDiff[0,:N//2].flatten())
-    bottomNorm = np.linalg.norm(modeDiff[0,N//2 :].flatten())
-    if topNorm <= bottomNorm:
-        # Then modeDiff is modeBottom (it's almost zero in the top-half)
-        modeBottom = modeDiff/2.
-        modeTop = modeSum/2.
-    else :
-        modeBottom = modeSum/2.
-        modeTop = modeDiff/2.
-
-    modeDict = {'symm':modeSymm,'anti':modeAnti,'bottom':modeBottom,'top':modeTop,\
-            'err':0.5*(symmErr+antiErr)}
-    return modeDict
